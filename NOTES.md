@@ -38,19 +38,38 @@ No selectors reach into host markup. Nothing here breaks when Block renames a co
 
 ## Network
 
-One origin: `https://calendar.google.com`, declared in `manifest.json` and used only through
-`ctx.host.request`. No `fetch`, no `WebSocket`, no remote image, no `eval`.
+Four declared origins, all reached through `ctx.host.request`:
 
-## The credential
+| Origin | Why |
+| --- | --- |
+| `https://oauth2.googleapis.com` | code exchange and refresh |
+| `https://www.googleapis.com` | Calendar API events.list |
+| `https://meet.googleapis.com` | Meet API spaces.create |
+| `https://calendar.google.com` | the iCal fallback |
 
-The calendar's secret iCal address, which is the user's own and is not a password:
+No `fetch`, no `WebSocket`, no remote image, no `eval`. The sign-in page itself is opened by the
+host from an `<a>`, not fetched.
+
+## The credentials
+
+Two sets, both the user's own, both optional:
+
+**OAuth** — the client ID and secret from their own Google Cloud project, plus the refresh token
+Google issues. The client secret is a public-client secret: for a Desktop app client it cannot be
+kept confidential, which is why PKCE is used on top of it.
+
+**iCal** — the calendar's secret address, which is a capability rather than a password: whoever
+holds it can read that calendar.
+
+Both sets:
 
 - Never embedded in the plugin, the manifest, a test or a log
-- Saved to the Keychain (`security`) or the Secret Service (`secret-tool`), and confirmed by
-  reading it back — an exit status of 0 is not trusted
+- Stored as one JSON document in the Keychain (`security`) or the Secret Service (`secret-tool`),
+  confirmed by reading it back — an exit status of 0 is not trusted
 - Where neither store exists, kept in this profile's `localStorage` as plain text, and the
   settings card says so in those words
-- Never rendered after saving, never logged, sent only in one request header
+- Never rendered after saving, never logged
+- Sent only to the origins above
 
 The address is validated before it is saved: it must be
 `https://calendar.google.com/calendar/ical/…/basic.ics`, and the feed must actually parse. A
@@ -83,11 +102,19 @@ Two bugs were found and fixed by these tests rather than by luck:
 
 ## What was not verified
 
+- **The OAuth flow has never been run against Google.** Every part is tested against a stand-in
+  host, not the real token endpoint: PKCE, the auth URL, the redirect parser, the Calendar
+  response mapping. The code exchange, the refresh and `spaces.create` are unproven against the
+  live API. The first connect is the real test.
 - **Never loaded into the Buzz desktop app.** The `apply()` smoke test uses a stub host, not the
-  real one. The first install is the real test.
-- **Never fetched a real Google calendar.** The parser was tested against hand-written feeds
-  shaped like Google's export. A real feed may carry properties this parser ignores — that is
-  fine — or a shape it mishandles, which is not.
+  real one. Two host behaviours are assumed rather than seen: that `<a target="_blank">` opens the
+  system browser (needed for the sign-in link and every Join button), and that `crypto.subtle`
+  exists in the webview for the S256 challenge.
+- **POST bodies through `host.request`.** The exchange and refresh send
+  `application/x-www-form-urlencoded` bodies. The documented `HostRequest` carries a `body` string
+  and headers, but nothing states the content type survives — untested.
+- **A real Google calendar was never fetched.** The iCal parser ran on hand-written feeds shaped
+  like Google's export; the API mapping ran on a hand-written response.
 - **The credential store was not exercised.** No `security` or `secret-tool` call was made: the
   tests pass a stub runner. The read-back logic is unproven against the real programs.
 - **macOS (WKWebView) and Windows were not run at all.** Linux desktop was not run either.

@@ -649,6 +649,139 @@ export function eventsFromApi(json) {
 
 
 // ---------------------------------------------------------------------------
+// The vault: one JSON document in whichever credential store the system has
+// ---------------------------------------------------------------------------
+
+export function createVault(store) {
+  const read = () => {
+    try {
+      const raw = store.read();
+      if (!raw) return {};
+      const parsed = JSON.parse(raw);
+      // Arrays and nulls are objects to typeof, and spreading one would poison
+      // every later write with numeric keys.
+      return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+    } catch {
+      return {};
+    }
+  };
+  return {
+    get ready() {
+      return store.ready;
+    },
+    read,
+    place: () => store.place(),
+    store: () => store.store(),
+    subscribe: (fn) => store.subscribe(fn),
+    async write(patch) {
+      const next = { ...read(), ...patch };
+      for (const key of Object.keys(next)) if (next[key] === undefined) delete next[key];
+      return store.save(JSON.stringify(next));
+    },
+    async clear() {
+      return store.clear();
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Google client: refresh, list events, create a space, exchange a code
+// ---------------------------------------------------------------------------
+
+function createGoogle({ host, vault }) {
+  let cached = null;
+
+  async function accessToken() {
+    if (cached && Date.now() < cached.expiresAt - 60_000) return cached.access;
+    const config = vault.read();
+    if (!config.refreshToken || !config.clientId || !config.clientSecret) throw new Error("not-connected");
+    const response = await host.request({
+      url: TOKEN_ENDPOINT,
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: refreshBody({
+        refreshToken: config.refreshToken,
+        clientId: config.clientId,
+        clientSecret: config.clientSecret,
+      }),
+    });
+    const json = JSON.parse(response.body || "{}");
+    if (response.status !== 200 || !json.access_token) {
+      // invalid_grant: revoked by the user, or expired. Only a reconnect fixes it.
+      throw new Error(json.error === "invalid_grant" ? "reauthorise" : "token");
+    }
+    cached = { access: json.access_token, expiresAt: Date.now() + (Number(json.expires_in) || 3600) * 1000 };
+    return cached.access;
+  }
+
+  async function listEvents(now) {
+    const token = await accessToken();
+    const query = new URLSearchParams({
+      timeMin: new Date(now - 3600_000).toISOString(),
+      timeMax: new Date(now + LOOKAHEAD_DAYS * DAY_MS).toISOString(),
+      singleEvents: "true",
+      orderBy: "startTime",
+      maxResults: "100",
+    });
+    const response = await host.request({
+      url: "https://www.googleapis.com/calendar/v3/calendars/primary/events?" + query.toString(),
+      headers: { Authorization: "Bearer " + token, Accept: "application/json" },
+    });
+    if (response.status === 401 || response.status === 403) throw new Error("reauthorise");
+    if (response.status !== 200) throw new Error("calendar");
+    return eventsFromApi(JSON.parse(response.body));
+  }
+
+  async function createSpace() {
+    const token = await accessToken();
+    const response = await host.request({
+      url: "https://meet.googleapis.com/v2/spaces",
+      method: "POST",
+      headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" },
+      body: "{}",
+    });
+    if (response.status !== 200 && response.status !== 201) throw new Error("meet");
+    const json = JSON.parse(response.body || "{}");
+    if (!json.meetingUri) throw new Error("meet");
+    return json.meetingUri;
+  }
+
+  async function exchange({ code, verifier }) {
+    const config = vault.read();
+    const response = await host.request({
+      url: TOKEN_ENDPOINT,
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: exchangeBody({
+        code,
+        verifier,
+        clientId: config.clientId,
+        clientSecret: config.clientSecret,
+      }),
+    });
+    const json = JSON.parse(response.body || "{}");
+    if (response.status !== 200 || !json.access_token) {
+      throw new Error(json.error === "invalid_grant" ? "expired-code" : "exchange");
+    }
+    if (!json.refresh_token) throw new Error("no-refresh");
+    await vault.write({ refreshToken: json.refresh_token, verifier: undefined });
+    cached = { access: json.access_token, expiresAt: Date.now() + (Number(json.expires_in) || 3600) * 1000 };
+    return true;
+  }
+
+  return {
+    accessToken,
+    listEvents,
+    createSpace,
+    exchange,
+    connected: () => Boolean(vault.read().refreshToken),
+    forget() {
+      cached = null;
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Text
 // ---------------------------------------------------------------------------
 
@@ -700,41 +833,72 @@ const CSS = `
 .ofm-label { display: block; font-size: 13px; font-weight: 600; margin: 0 0 6px; }
 .ofm-hint { font-size: 12px; opacity: 0.72; margin: 8px 0 0; line-height: 1.5; }
 .ofm-status { font-size: 12px; margin: 12px 0 0; opacity: 0.8; }
+.ofm-divider { border: 0; border-top: 1px solid var(--border-subtle, rgba(128,128,128,0.24)); margin: 20px 0; }
+.ofm-button-primary { background: var(--accent-9, #ff8b1a); color: var(--accent-contrast, #fff); border-color: transparent; font-weight: 600; text-decoration: none; }
+.ofm-button-primary:hover { background: var(--affordance-backdrop-pressed, var(--accent-9, #ff8b1a)); }
+.ofm-button[disabled] { opacity: 0.5; cursor: default; }
+.ofm-footer { display: flex; gap: 14px; align-items: center; margin-top: 22px; flex-wrap: wrap; }
+.ofm-source { font-size: 11px; opacity: 0.55; margin-left: auto; }
+.ofm-field + .ofm-field { margin-top: 8px; }
 `;
 
 // ---------------------------------------------------------------------------
 // Pages and cards
 // ---------------------------------------------------------------------------
 
-function createMeetPage({ React, credentials, host, openSettings }) {
+function createMeetPage({ React, vault, google, host, openSettings }) {
   const { useState, useEffect, useCallback } = React;
   const h = React.createElement;
 
   return function MeetPage() {
     const [state, setState] = useState({ status: "loading" });
     const [tick, setTick] = useState(0);
+    const [instant, setInstant] = useState({ status: "idle" });
 
     const load = useCallback(async () => {
-      await credentials.ready;
-      const address = credentials.read();
-      if (!address) {
+      await vault.ready;
+      const config = vault.read();
+
+      // OAuth first: no feed, so no cache, no redaction and a real Meet link.
+      if (config.refreshToken) {
+        try {
+          const events = await google.listEvents(Date.now());
+          setState({
+            status: "ready",
+            source: "google",
+            slots: upcoming(events, Date.now()),
+            read: events.length,
+            redacted: false,
+            lastStart: events.length
+              ? new Date(Math.max(...events.map((event) => event.start.getTime())))
+              : null,
+            publicFeed: false,
+          });
+        } catch (error) {
+          setState({ status: "error", reason: error.message, source: "google" });
+        }
+        return;
+      }
+
+      if (!config.ical) {
         setState({ status: "unconfigured" });
         return;
       }
       try {
-        const events = await fetchCalendar(host, address);
+        const events = await fetchCalendar(host, config.ical);
         setState({
           status: "ready",
+          source: "ical",
           slots: upcoming(events, Date.now()),
           read: events.length,
           redacted: events.length > 0 && events.every((event) => event.summary === "Busy"),
           lastStart: events.length
             ? new Date(Math.max(...events.map((event) => event.start.getTime())))
             : null,
-          publicFeed: isPublicFeed(address),
+          publicFeed: isPublicFeed(config.ical),
         });
       } catch (error) {
-        setState({ status: "error", reason: error.message });
+        setState({ status: "error", reason: error.message, source: "ical" });
       }
     }, []);
 
@@ -753,6 +917,15 @@ function createMeetPage({ React, credentials, host, openSettings }) {
       };
     }, [load]);
 
+    const startInstant = async () => {
+      setInstant({ status: "working" });
+      try {
+        setInstant({ status: "ready", uri: await google.createSpace() });
+      } catch {
+        setInstant({ status: "error" });
+      }
+    };
+
     if (state.status === "loading") {
       return h("div", { className: "ofm-page" }, h("p", { className: "ofm-lead" }, "Reading your calendar…"));
     }
@@ -765,17 +938,25 @@ function createMeetPage({ React, credentials, host, openSettings }) {
         h(
           "p",
           { className: "ofm-lead" },
-          "Paste your calendar's secret iCal address once. No password, no Google sign-in, and it does not expire.",
+          "Connect Google in Settings to read your calendar and start meetings. Or paste a calendar's secret iCal address there instead.",
         ),
         h("button", { className: "ofm-button", onClick: openSettings, type: "button" }, "Open Meet settings"),
       );
     }
 
     if (state.status === "error") {
-      const message =
-        state.reason === "gone" || state.reason === "denied"
-          ? "Google refused that calendar address. Check it in Settings — a reset calendar has a new address."
-          : "Could not read the calendar just now. It will try again in a minute.";
+      let message;
+      if (state.reason === "reauthorise") {
+        message = "Google access expired or was revoked. Reconnect in Settings → Plugins → Meet.";
+      } else if (state.reason === "no-refresh") {
+        message = "Google did not send a refresh token. Remove this website's access at myaccount.google.com/permissions, then connect again.";
+      } else if (state.reason === "gone" || state.reason === "denied") {
+        message = "Google refused that calendar address. Check it in Settings — a reset calendar has a new address.";
+      } else if (state.source === "google") {
+        message = "Could not read your calendar from Google just now. It will try again in a minute.";
+      } else {
+        message = "Could not read the calendar just now. It will try again in a minute.";
+      }
       return h(
         "div",
         { className: "ofm-page" },
@@ -875,36 +1056,158 @@ function createMeetPage({ React, credentials, host, openSettings }) {
             ),
           )
         : null,
+      h(
+        "div",
+        { className: "ofm-footer" },
+        state.source === "google"
+          ? instant.status === "ready"
+            ? h(
+                "a",
+                {
+                  className: "ofm-button ofm-button-primary",
+                  href: instant.uri,
+                  target: "_blank",
+                  rel: "noopener noreferrer",
+                },
+                "Join your new meeting",
+              )
+            : h(
+                "button",
+                {
+                  className: "ofm-button",
+                  type: "button",
+                  disabled: instant.status === "working",
+                  onClick: () => void startInstant(),
+                },
+                instant.status === "working" ? "Starting…" : "Start a meeting now",
+              )
+          : null,
+        instant.status === "error"
+          ? h("span", { className: "ofm-error" }, "Google could not create the meeting.")
+          : null,
+        h("span", { className: "ofm-source" }, state.source === "google" ? "Google Calendar" : "iCal feed"),
+      ),
     );
   };
 }
 
-function createSettingsCard({ React, credentials, host }) {
+function createSettingsCard({ React, vault, google, host }) {
   const { useState, useEffect } = React;
   const h = React.createElement;
 
   return function MeetSettings() {
+    const [config, setConfig] = useState({});
+    const [place, setPlace] = useState(vault.place());
+    const [clientId, setClientId] = useState("");
+    const [clientSecret, setClientSecret] = useState("");
+    const [phase, setPhase] = useState("idle"); // idle | authorize
+    const [authUrl, setAuthUrl] = useState("");
+    const [pasted, setPasted] = useState("");
     const [address, setAddress] = useState("");
-    const [saved, setSaved] = useState(credentials.has());
-    const [place, setPlace] = useState(credentials.place());
     const [message, setMessage] = useState(null);
     const [busy, setBusy] = useState(false);
 
+    const sync = () => {
+      setConfig(vault.read());
+      setPlace(vault.place());
+    };
+
     useEffect(() => {
-      void credentials.ready.then(() => {
-        setSaved(credentials.has());
-        setPlace(credentials.place());
-      });
-      return credentials.subscribe(() => {
-        setSaved(credentials.has());
-        setPlace(credentials.place());
-      });
+      void vault.ready.then(sync);
+      return vault.subscribe(sync);
     }, []);
 
-    const storeName = STORE_LABEL[credentials.store()] ?? null;
-    const publishedFeed = isPublicFeed(address) || (saved && isPublicFeed(credentials.read()));
+    const storeName = STORE_LABEL[vault.store()] ?? null;
+    const connected = Boolean(config.refreshToken);
+    const publishedFeed = isPublicFeed(address) || isPublicFeed(config.ical ?? "");
+    const whereKept = place === "profile" ? "this Buzz profile, in plain text" : storeName ?? "the system store";
 
-    const save = async () => {
+    // --- Google: start the sign-in -----------------------------------------
+    const beginConnect = async () => {
+      const id = clientId.trim();
+      const secret = clientSecret.trim();
+      if (!/^[0-9A-Za-z_-]+\.apps\.googleusercontent\.com$/.test(id)) {
+        setMessage({ kind: "error", text: "That is not a Google client ID — it ends in .apps.googleusercontent.com." });
+        return;
+      }
+      if (!secret) {
+        setMessage({ kind: "error", text: "Paste the client secret as well." });
+        return;
+      }
+      setBusy(true);
+      setMessage(null);
+      try {
+        const verifier = makeVerifier();
+        const challenge = await challengeFor(verifier);
+        const saved = await vault.write({ clientId: id, clientSecret: secret, verifier });
+        if (!saved.kept) {
+          setMessage({ kind: "error", text: "The system store did not keep the client details. Nothing was changed." });
+        } else {
+          setAuthUrl(buildAuthUrl({ clientId: id, challenge }));
+          setPhase("authorize");
+        }
+      } catch {
+        setMessage({ kind: "error", text: "Could not prepare the sign-in. Try again." });
+      }
+      setBusy(false);
+    };
+
+    // --- Google: finish the sign-in with the pasted address ----------------
+    const finishConnect = async () => {
+      const parsed = parseRedirect(pasted);
+      if (!parsed.ok) {
+        setMessage({
+          kind: "error",
+          text:
+            parsed.reason === "access_denied"
+              ? "You cancelled the Google consent, or the app is not approved."
+              : "That address has no code in it. Copy the whole address the browser landed on.",
+        });
+        return;
+      }
+      const verifier = vault.read().verifier;
+      if (!verifier) {
+        setPhase("idle");
+        setMessage({ kind: "error", text: "The sign-in request expired. Start again." });
+        return;
+      }
+      setBusy(true);
+      setMessage(null);
+      try {
+        await google.exchange({ code: parsed.code, verifier });
+        sync();
+        setPhase("idle");
+        setClientId("");
+        setClientSecret("");
+        setPasted("");
+        setAuthUrl("");
+        setMessage({ kind: "ok", text: "Connected to Google Calendar and Meet." });
+      } catch (error) {
+        const text = {
+          "expired-code": "That code has expired or was already used. Start the sign-in again.",
+          "no-refresh":
+            "Google did not send a refresh token. Remove this app at myaccount.google.com/permissions, then connect again.",
+          exchange: "Google refused the exchange. Check the client ID and secret.",
+        }[error.message];
+        setMessage({ kind: "error", text: text ?? "The exchange failed. Try again." });
+      }
+      setBusy(false);
+    };
+
+    const disconnect = async () => {
+      setBusy(true);
+      google.forget();
+      await vault.write({ refreshToken: undefined, verifier: undefined });
+      sync();
+      setBusy(false);
+      setMessage({
+        kind: "ok",
+        text: "Disconnected here. Revoke the app at myaccount.google.com/permissions to remove it from your Google account too.",
+      });
+    };
+
+    // --- iCal fallback -----------------------------------------------------
+    const saveAddress = async () => {
       const value = address.trim();
       if (!isCalendarAddress(value)) {
         setMessage({
@@ -928,7 +1231,7 @@ function createSettingsCard({ React, credentials, host }) {
         });
         return;
       }
-      const result = await credentials.save(value);
+      const result = await vault.write({ ical: value });
       setBusy(false);
       if (!result.kept) {
         setMessage({ kind: "error", text: "Your system store did not keep the address. Nothing was changed." });
@@ -939,27 +1242,119 @@ function createSettingsCard({ React, credentials, host }) {
         kind: "ok",
         text: result.degraded
           ? "Saved, and it works. The system store would not take it, so it is kept in this profile in plain text."
-          : "Saved, and it works. Nothing else in Buzz can read it.",
+          : "Saved, and it works.",
       });
     };
 
-    const clear = async () => {
+    const clearAddress = async () => {
       setBusy(true);
-      await credentials.clear();
+      await vault.write({ ical: undefined });
       setBusy(false);
-      setMessage({ kind: "ok", text: "Removed." });
+      setMessage({ kind: "ok", text: "Calendar address removed." });
     };
+
+    const googleSection = connected
+      ? h(
+          "div",
+          null,
+          h("p", { className: "ofm-status" }, "Connected to Google Calendar and Meet."),
+          h(
+            "div",
+            { className: "ofm-actions" },
+            h(
+              "button",
+              { className: "ofm-button", type: "button", disabled: busy, onClick: () => void disconnect() },
+              "Disconnect",
+            ),
+          ),
+        )
+      : phase === "authorize"
+        ? h(
+            "div",
+            null,
+            h(
+              "p",
+              { className: "ofm-hint" },
+              "Open the link and approve access. The browser then lands on a page that says the site cannot be reached — " +
+                "that is expected, because nothing listens on 127.0.0.1. Copy that whole address and paste it below.",
+            ),
+            h(
+              "a",
+              { className: "ofm-button ofm-button-primary", href: authUrl, target: "_blank", rel: "noopener noreferrer" },
+              "Open Google sign-in",
+            ),
+            h(
+              "div",
+              { className: "ofm-actions" },
+              h("input", {
+                className: "ofm-field",
+                type: "text",
+                spellCheck: false,
+                autoComplete: "off",
+                placeholder: "http://127.0.0.1:8765/?code=…",
+                value: pasted,
+                onChange: (event) => setPasted(event.target.value),
+              }),
+              h(
+                "button",
+                { className: "ofm-button", type: "button", disabled: busy || !pasted.trim(), onClick: () => void finishConnect() },
+                busy ? "Finishing…" : "Finish",
+              ),
+            ),
+          )
+        : h(
+            "div",
+            null,
+            h(
+              "p",
+              { className: "ofm-hint" },
+              "Paste the client ID and secret from your Google Cloud project's OAuth client (type Desktop app). " +
+                "They are kept in the system credential store, never shown again, and never sent anywhere except Google's token endpoint.",
+            ),
+            h("input", {
+              className: "ofm-field",
+              type: "text",
+              spellCheck: false,
+              autoComplete: "off",
+              placeholder: "Client ID (…apps.googleusercontent.com)",
+              value: clientId,
+              onChange: (event) => setClientId(event.target.value),
+            }),
+            h("input", {
+              className: "ofm-field",
+              type: "password",
+              autoComplete: "off",
+              placeholder: "Client secret",
+              value: clientSecret,
+              onChange: (event) => setClientSecret(event.target.value),
+            }),
+            h(
+              "div",
+              { className: "ofm-actions" },
+              h(
+                "button",
+                { className: "ofm-button ofm-button-primary", type: "button", disabled: busy, onClick: () => void beginConnect() },
+                busy ? "Preparing…" : "Connect Google",
+              ),
+            ),
+          );
 
     return h(
       "div",
       null,
-      h("p", { className: "ofm-label" }, "Calendar address"),
+      h("p", { className: "ofm-label" }, "Google Calendar and Meet"),
+      googleSection,
+      message ? h("p", { className: message.kind === "error" ? "ofm-error" : "ofm-status" }, message.text) : null,
+
+      h("hr", { className: "ofm-divider" }),
+
+      h("p", { className: "ofm-label" }, "Or a calendar iCal address"),
       h("input", {
         className: "ofm-field",
         type: "text",
         spellCheck: false,
         autoComplete: "off",
-        placeholder: saved ? "A calendar address is saved" : "https://calendar.google.com/calendar/ical/…/basic.ics",
+        placeholder: config.ical ? "A calendar address is saved" : "https://calendar.google.com/calendar/ical/…/basic.ics",
         value: address,
         onChange: (event) => setAddress(event.target.value),
       }),
@@ -967,19 +1362,23 @@ function createSettingsCard({ React, credentials, host }) {
         "p",
         { className: "ofm-hint" },
         "Google Calendar → Settings and sharing → Integrate calendar → Secret address in iCal format. ",
-        "This is a private read-only link to one calendar. Anyone holding it can read that calendar, " +
-          "so treat it like a password. It is sent only to calendar.google.com.",
+        "Use this when Google sign-in is not available for the account. It is a private read-only link to one calendar. ",
+        "Anyone holding it can read that calendar, so treat it like a password.",
       ),
       h(
         "div",
         { className: "ofm-actions" },
         h(
           "button",
-          { className: "ofm-button", type: "button", disabled: busy || !address.trim(), onClick: () => void save() },
-          busy ? "Checking…" : saved ? "Replace" : "Save",
+          { className: "ofm-button", type: "button", disabled: busy || !address.trim(), onClick: () => void saveAddress() },
+          busy ? "Checking…" : config.ical ? "Replace" : "Save",
         ),
-        saved
-          ? h("button", { className: "ofm-button", type: "button", disabled: busy, onClick: () => void clear() }, "Remove")
+        config.ical
+          ? h(
+              "button",
+              { className: "ofm-button", type: "button", disabled: busy, onClick: () => void clearAddress() },
+              "Remove",
+            )
           : null,
       ),
       publishedFeed
@@ -987,20 +1386,17 @@ function createSettingsCard({ React, credentials, host }) {
             "p",
             { className: "ofm-error" },
             "That is the public address. Google hides event details from it: every event arrives as “Busy”, with no summary and no Meet link. " +
-              "Use the secret address instead — Google Calendar → Settings and sharing → Integrate calendar → Secret address in iCal format.",
+              "Use the secret address, or connect Google above.",
           )
-        : null,
-      message
-        ? h("p", { className: message.kind === "error" ? "ofm-error" : "ofm-status" }, message.text)
         : null,
       h(
         "p",
         { className: "ofm-status" },
-        saved
-          ? `Saved in ${place === "profile" ? "this Buzz profile, in plain text" : storeName ?? "the system store"}.`
+        connected || config.ical
+          ? `Saved in ${whereKept}.`
           : storeName
-            ? `Nothing saved yet. Your address will go to ${storeName}.`
-            : "Nothing saved yet. This system has no credential store the plugin can reach, so the address will be kept in this Buzz profile in plain text.",
+            ? `Nothing saved yet. Your details will go to ${storeName}.`
+            : "Nothing saved yet. This system has no credential store the plugin can reach, so details will be kept in this Buzz profile in plain text.",
       ),
     );
   };
@@ -1018,6 +1414,8 @@ export function apply(ctx) {
     store: detectStore(navigator.platform, navigator.userAgent),
     run: (id, input) => ctx.host.runCommand(id, input),
   });
+  const vault = createVault(credentials);
+  const google = createGoogle({ host: ctx.host, vault });
 
   ctx.effect(() => {
     // [DOM] API v1 has no CSS file and the host has no style service, so the
@@ -1041,13 +1439,13 @@ export function apply(ctx) {
     primary: true,
     layout: "workspace",
     placement: "sidebar",
-    component: createMeetPage({ React, credentials, host: ctx.host, openSettings }),
+    component: createMeetPage({ React, vault, google, host: ctx.host, openSettings }),
   });
 
   ctx.settingsCards.register({
     id: "settings",
     title: "Meet",
     group: "Plugins",
-    component: createSettingsCard({ React, credentials, host: ctx.host }),
+    component: createSettingsCard({ React, vault, google, host: ctx.host }),
   });
 }

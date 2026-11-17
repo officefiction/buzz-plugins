@@ -42,6 +42,11 @@
         "args": ["clear", "service", "buzz-meet", "account", "meet"]
       }
     ],
-    "networkOrigins": ["https://calendar.google.com"]
+    "networkOrigins": [
+      "https://calendar.google.com",
+      "https://www.googleapis.com",
+      "https://meet.googleapis.com",
+      "https://oauth2.googleapis.com"
+    ]
   }
 }
