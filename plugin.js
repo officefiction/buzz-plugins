@@ -1101,36 +1101,56 @@ function launcherMessage(reason) {
   return "The room registry is unreachable.";
 }
 
-// The Meet mark, inlined so no image is fetched and the icon works offline.
-// Shape from Wikimedia Commons, "Google Meet icon (2026).svg": the wing sits
-// behind the body, then the inset face, then the play triangle. The play path
-// runs past the viewBox and is clipped by it in the original too, so the frame
-// is left as it is. Google's mark is a Google trademark; this is not an
-// endorsement by Google.
+// The Meet mark, drawn inline as DOM nodes: no image element, no data URI, no
+// fetch, and no dependence on the injected stylesheet.
+//
+// Shape from Wikimedia Commons, "Google Meet icon (2026).svg" — public domain
+// there, flagged trademarked. Read from the file rather than guessed:
+//   path2   the horn, drawn first so the body overlaps its tip
+//   path4   the body
+//   circle  the white dot
+//   path6   only a <mask> shape, not something to draw
+//   path9   a blurred pink glow inside the body; dropped, it needs the filter
 const MEET_MARK = {
-  wing: "M 102.015,81.88 C 95.186,77.162 95.094,67.102 101.836,62.26 L 157,22.643 c 7.94,-5.701 19,-0.038 19,9.737 v 77.755 c 0,9.675 -10.861,15.359 -18.821,9.859 z",
+  horn: "M 102.015,81.88 C 95.186,77.162 95.094,67.102 101.836,62.26 L 157,22.643 c 7.94,-5.701 19,-0.038 19,9.737 v 77.755 c 0,9.675 -10.861,15.359 -18.821,9.859 z",
   body: "M 0,44 C 0,19.7 19.7,0 44,0 h 64 c 11.046,0 20,8.954 20,20 v 98 c 0,11.046 -8.954,20 -20,20 H 20 C 8.9539999,138 0,129.046 0,118 Z",
-  face: "M 8,71 C 8,46.7 27.7,27 52,27 h 64 c 11.046,0 20,8.954 20,20 v 98 c 0,11.046 -8.954,20 -20,20 H 28 C 16.954,165 8,156.046 8,145 Z",
-  play: "M 73.906,99.198 183.906,36 v 124 z",
+  dot: { cx: 30, cy: 108, r: 14 },
 };
 
 // Muted while the conversation has no room, yellow once it has one.
-const MARK_IDLE = { strong: "#9aa0a6", soft: "#e8eaed" };
-const MARK_LIVE = { strong: "#fbbc04", soft: "#fef7e0" };
+const MARK_IDLE = { strong: "#9aa0a6", soft: "#ffffff" };
+const MARK_LIVE = { strong: "#fbbc04", soft: "#ffffff" };
 
-export function meetMark({ strong, soft }) {
-  const svg =
-    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 176 138">' +
-    `<path fill="${strong}" d="${MEET_MARK.wing}"/>` +
-    `<path fill="${strong}" d="${MEET_MARK.body}"/>` +
-    `<path fill="${soft}" d="${MEET_MARK.face}"/>` +
-    `<path fill="${strong}" d="${MEET_MARK.play}"/>` +
-    "</svg>";
-  return "data:image/svg+xml," + encodeURIComponent(svg);
+/** Horn, body, then the dot on top — the order the source draws them in. */
+export function meetMarkShapes(colors) {
+  const { strong, soft } = colors;
+  return [
+    { kind: "path", name: "horn", d: MEET_MARK.horn, fill: strong },
+    { kind: "path", name: "body", d: MEET_MARK.body, fill: strong },
+    { kind: "circle", name: "dot", cx: MEET_MARK.dot.cx, cy: MEET_MARK.dot.cy, r: MEET_MARK.dot.r, fill: soft },
+  ];
 }
 
-const MARK_IDLE_URL = meetMark(MARK_IDLE);
-const MARK_LIVE_URL = meetMark(MARK_LIVE);
+function meetMarkElement(h, colors) {
+  return h(
+    "svg",
+    {
+      className: "bp-meet-mark",
+      viewBox: "0 0 176 138",
+      width: 18,
+      height: 14,
+      // Inline so the mark renders even if the style element did not apply.
+      style: { width: "18px", height: "14px", display: "block" },
+      "aria-hidden": "true",
+      focusable: "false",
+    },
+    meetMarkShapes(colors).map((shape) =>
+      shape.kind === "circle"
+        ? h("circle", { key: shape.name, cx: shape.cx, cy: shape.cy, r: shape.r, fill: shape.fill })
+        : h("path", { key: shape.name, d: shape.d, fill: shape.fill }),
+    ),
+  );
+}
 
 function createChannelLauncher({ React, registry, google }) {
   const { useState, useEffect, useCallback } = React;
@@ -1184,7 +1204,7 @@ function createChannelLauncher({ React, registry, google }) {
           "aria-label": "Join the Meet room for this conversation",
           title: `Join the Meet room — ${state.room.code}`,
         },
-        h("img", { className: "bp-meet-mark", src: MARK_LIVE_URL, alt: "", width: 18, height: 14 }),
+        meetMarkElement(h, MARK_LIVE),
       );
     }
 
@@ -1201,7 +1221,7 @@ function createChannelLauncher({ React, registry, google }) {
             : "Start a Meet room that everyone in this conversation can join",
         onClick: () => void start(),
       },
-      h("img", { className: "bp-meet-mark", src: MARK_IDLE_URL, alt: "", width: 18, height: 14 }),
+      meetMarkElement(h, MARK_IDLE),
     );
   };
 }

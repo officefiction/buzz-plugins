@@ -1,4 +1,4 @@
-import { meetMark } from "./plugin.js";
+import { meetMarkShapes } from "./plugin.js";
 
 let fail = 0;
 const check = (name, got, want) => {
@@ -6,38 +6,42 @@ const check = (name, got, want) => {
   if (!ok) fail += 1;
   console.log(`${ok ? "PASS" : "FAIL"}  ${name}${ok ? "" : `\n        got:  ${JSON.stringify(got)}\n        want: ${JSON.stringify(want)}`}`);
 };
+const ok = (name, value, detail = "") => {
+  if (!value) fail += 1;
+  console.log(`${value ? "PASS" : "FAIL"}  ${name}${value || !detail ? "" : ` — ${detail}`}`);
+};
 
-const idle = meetMark({ strong: "#9aa0a6", soft: "#e8eaed" });
-const live = meetMark({ strong: "#fbbc04", soft: "#fef7e0" });
+const idle = meetMarkShapes({ strong: "#9aa0a6", soft: "#ffffff" });
+const live = meetMarkShapes({ strong: "#fbbc04", soft: "#ffffff" });
 
-check("is a data URI", idle.startsWith("data:image/svg+xml,"), true);
-check("carries no remote reference", /src=|href=|url\(/.test(decodeURIComponent(idle)), false);
+// The source draws the horn first so the body covers its tip, then the dot.
+check("three shapes", idle.length, 3);
+check("source draw order", idle.map((s) => s.name), ["horn", "body", "dot"]);
+check("two paths and a circle", idle.map((s) => s.kind), ["path", "body", "circle"].map((k) => (k === "body" ? "path" : k)));
 
-const svg = decodeURIComponent(idle.slice("data:image/svg+xml,".length));
-check("decodes to an svg element", svg.startsWith("<svg"), true);
-check("declares the svg namespace", svg.includes('xmlns="http://www.w3.org/2000/svg"'), true);
-check("keeps the source viewBox", svg.includes('viewBox="0 0 176 138"'), true);
-check("has the four paths", (svg.match(/<path/g) ?? []).length, 4);
-check("strong colour on the body", svg.includes("#9aa0a6"), true);
-check("soft colour on the face", svg.includes("#e8eaed"), true);
-check("no unfilled path", svg.includes('fill=""'), false);
+const [horn, body, dot] = idle;
+ok("the horn is a path with geometry", horn.kind === "path" && horn.d.startsWith("M"));
+ok("the body is a path with geometry", body.kind === "path" && body.d.startsWith("M"));
+check("the dot is a circle", dot.kind, "circle");
+check("the dot sits lower left", [dot.cx, dot.cy, dot.r], [30, 108, 14]);
 
-// Draw order matters: the wing sits behind the body, as in the source file.
-const order = ["102.015,81.88", "M 0,44", "M 8,71", "M 73.906,99.198"].map((needle) => svg.indexOf(needle));
-check("wing before body", order[0] < order[1], true);
-check("body before face", order[1] < order[2], true);
-check("face before play", order[2] < order[3], true);
+check("horn takes the state colour", horn.fill, "#9aa0a6");
+check("body takes the state colour", body.fill, "#9aa0a6");
+check("the dot stays white", dot.fill, "#ffffff");
 
-check("the two states differ", idle === live, false);
-const liveSvg = decodeURIComponent(live.slice("data:image/svg+xml,".length));
-check("live uses Google yellow", liveSvg.includes("#fbbc04"), true);
-check("live soft face", liveSvg.includes("#fef7e0"), true);
-check("live drops the grey", liveSvg.includes("#9aa0a6"), false);
+// The mask shape and the blurred glow must not be drawn.
+const all = JSON.stringify(idle);
+ok("the mask path is not drawn", !all.includes("M 8,71"), "found the mask rounded rect");
+ok("the blurred glow is not drawn", !all.includes("183.906,36"), "found the pink glow triangle");
+ok("no remote reference", !/https?:/.test(all));
 
-check("output is URI safe", /[\s#<>"]/.test(idle.slice("data:image/svg+xml,".length)), false);
-
-// Deterministic: two calls with the same colours give the same string.
-check("is deterministic", meetMark({ strong: "#9aa0a6", soft: "#e8eaed" }), idle);
+check("live uses Google yellow", live[1].fill, "#fbbc04");
+check("the two states differ", all === JSON.stringify(live), false);
+check(
+  "geometry is identical between states",
+  idle.map((s) => s.d ?? `${s.cx},${s.cy},${s.r}`).join("|"),
+  live.map((s) => s.d ?? `${s.cx},${s.cy},${s.r}`).join("|"),
+);
 
 console.log(fail === 0 ? "\nALL CHECKS PASSED" : `\n${fail} CHECK(S) FAILED`);
 process.exit(fail === 0 ? 0 : 1);

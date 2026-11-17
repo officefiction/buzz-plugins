@@ -99,17 +99,30 @@ path, which has since been removed — the Calendar API expands recurrences itse
 
 ## The Meet mark
 
-The launcher's icon is the Google Meet mark, inlined into `plugin.js` as an SVG data URI and
-recoloured per state: `#9aa0a6` grey when the conversation has no room, `#fbbc04` yellow when it
-has one, each with a lighter face underneath.
+The launcher's icon is the Google Meet mark, drawn inline as DOM nodes in `plugin.js` and recoloured
+per state: `#9aa0a6` grey while the conversation has no room, `#fbbc04` yellow once it has one, with
+a white dot. No image element, no data URI, no fetch — so it renders offline and adds no origin.
+
+Reading the source file mattered. The first attempt looked wrong because the file is not four flat
+shapes:
+
+| Source element | What it is | What this plugin does |
+| --- | --- | --- |
+| `path2` | the horn, orange | drawn, first, so the body overlaps its tip |
+| `path4` | the body, yellow radial | drawn |
+| `circle cx=30 cy=108 r=14` | the white dot | drawn last |
+| `path6` | a `<mask>` shape, not artwork | **not** drawn — drawing it covered the icon |
+| `path9` | a pink glow, inside `<g mask filter>` with `translate(-8,-27)` | **not** drawn — it needs the blur filter to make sense |
 
 | | |
 | --- | --- |
 | Shape | `File:Google Meet icon (2026).svg`, Wikimedia Commons |
 | Copyright | **Public domain** per Commons (below the threshold of originality); attribution not required |
 | Trademark | Commons flags it `Restricted: trademarked`. It is Google's mark, so it is used only to label a Google Meet feature, and nothing here implies Google endorses this plugin. |
-| Draw order | wing, body, inset face, play — as in the source; the play path runs past the `viewBox` and is clipped by it in the original too, so the frame is unchanged |
 | Fetched at runtime | no |
+
+`test-icon.mjs` guards the two mistakes that shipped once: the mask path and the glow triangle must
+not appear in the drawn output.
 
 ## Findings behind the room launcher
 
