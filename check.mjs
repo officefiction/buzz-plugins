@@ -133,6 +133,7 @@ check("inject lists the services used", Array.isArray(inject) && inject.includes
 const pages = [];
 const panels = [];
 const cards = [];
+const completions = [];
 const cleanups = [];
 let opened = null;
 const ctx = {
@@ -149,6 +150,7 @@ const ctx = {
   navigation: { open: async (target) => ((opened = target), {}) },
   pages: { register: (page) => pages.push(page) },
   panels: { register: (panel) => panels.push(panel) },
+  conversation: { registerCompletion: (completion) => completions.push(completion) },
   settingsCards: { register: (card) => cards.push(card) },
   effect: (setup) => {
     const cleanup = setup();
@@ -169,6 +171,16 @@ check("the launcher renders a component", (() => {
   const rendered = panels[0].channelLauncher({ context: { channelId: "c1", scope: "s", viewer: "v" } });
   return Boolean(rendered && rendered.type);
 })());
+check("registers exactly one composer completion", completions.length === 1, String(completions.length));
+check("the completion has an id and a title", Boolean(completions[0]?.id && completions[0]?.title));
+check("the completion has a matcher and a component", typeof completions[0]?.match === "function" && typeof completions[0]?.component === "function");
+check(
+  "typing /meet matches through the registration",
+  JSON.stringify(completions[0]?.match({ text: "/meet", start: 5, end: 5, revision: 1 })),
+  JSON.stringify({ start: 0, end: 5, query: "meet" }),
+);
+check("ordinary text does not match through the registration", completions[0]?.match({ text: "hello", start: 5, end: 5, revision: 1 }) === null);
+check("inject asks for the conversation service", inject.includes("conversation"));
 check("registers exactly one settings card", cards.length === 1, String(cards.length));
 check("card has id, title, group and a component", Boolean(cards[0]?.id && cards[0]?.title && cards[0]?.group && typeof cards[0]?.component === "function"));
 check("adds one style element", appended.length === 1, String(appended.length));

@@ -15,7 +15,7 @@
  * Plain ES module: Buzz never runs a build.
  */
 
-export const inject = ["react", "pages", "panels", "settingsCards", "navigation", "host"];
+export const inject = ["react", "pages", "panels", "settingsCards", "conversation", "navigation", "host"];
 
 const PLUGIN_ID = "com.buzzplugins.meet";
 const SETTINGS_SECTION = PLUGIN_ID + "/settings";
@@ -1227,6 +1227,81 @@ function createChannelLauncher({ React, registry, google }) {
 }
 
 // ---------------------------------------------------------------------------
+// The /meet command
+//
+// A composer completion: typing /meet offers the conversation's room link, and
+// accepting it replaces the command with that link. The message is still sent
+// by the person — a plugin cannot send one.
+// ---------------------------------------------------------------------------
+
+export const MEET_COMMAND = "/meet";
+
+/**
+ * A pure matcher for the /meet word immediately before the cursor. The host
+ * calls this on every keystroke, so it must not do anything but look at text.
+ */
+export function matchMeetCommand(text, cursor) {
+  const upTo = String(text ?? "").slice(0, Math.max(0, cursor ?? 0));
+  if (!upTo.endsWith(MEET_COMMAND)) return null;
+  const start = upTo.length - MEET_COMMAND.length;
+  // Only at the start of a word, so an address or a path never triggers it.
+  if (start > 0 && !/[\s([{>"']/.test(upTo[start - 1])) return null;
+  return { start, end: upTo.length, query: "meet" };
+}
+
+// One creation per conversation, even if two composers mount at once.
+const creating = new Map();
+
+async function ensureRoom({ registry, google, channelId }) {
+  const existing = await registry.getRoom(channelId);
+  if (existing) return existing;
+  if (creating.has(channelId)) return creating.get(channelId);
+  const attempt = (async () => {
+    const space = await google.createSpace();
+    return registry.putRoom(channelId, space);
+  })().finally(() => creating.delete(channelId));
+  creating.set(channelId, attempt);
+  return attempt;
+}
+
+function createMeetCommand({ React, registry, google }) {
+  const { useEffect } = React;
+
+  return function MeetCommand({ channelId, publish }) {
+    useEffect(() => {
+      let live = true;
+      let withdraw = false;
+      publish({ items: [], status: "Looking up this conversation's Meet room…" });
+      void ensureRoom({ registry, google, channelId })
+        .then((room) => {
+          if (!live) return;
+          if (withdraw) withdraw();
+          withdraw = publish({
+            items: [
+              {
+                id: "meet-link",
+                label: "Insert the Meet link",
+                detail: room.code,
+                edit: { text: room.uri },
+              },
+            ],
+          });
+        })
+        .catch((error) => {
+          if (!live) return;
+          if (withdraw) withdraw();
+          withdraw = publish({ items: [], status: launcherMessage(error.message) });
+        });
+      return () => {
+        live = false;
+        if (withdraw) withdraw();
+      };
+    }, [channelId, publish]);
+    return null;
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Entry point
 // ---------------------------------------------------------------------------
 
@@ -1242,6 +1317,7 @@ export function apply(ctx) {
   const google = createGoogle({ host: ctx.host, vault });
   const registry = createRegistry({ host: ctx.host, vault });
   const MeetLauncher = createChannelLauncher({ React, registry, google });
+  const MeetCommand = createMeetCommand({ React, registry, google });
 
   ctx.effect(() => {
     // [DOM] API v1 has no CSS file and the host has no style service, so the
@@ -1277,6 +1353,15 @@ export function apply(ctx) {
     channelPlacement: "side",
     channelLauncher: ({ context }) => React.createElement(MeetLauncher, { context }),
     component: () => null,
+  });
+
+  // /meet in the composer offers this conversation's room link.
+  ctx.conversation.registerCompletion({
+    id: "meet-room",
+    title: "Meet room",
+    order: 0,
+    match: (observation) => matchMeetCommand(observation.text, observation.start),
+    component: MeetCommand,
   });
 
   ctx.settingsCards.register({

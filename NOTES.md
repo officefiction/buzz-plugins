@@ -83,7 +83,8 @@ Run on Node 22, `npm test`:
 | Naming and origin hygiene: no company name in the plugin, four origins including the registry | pass |
 | Registry client: token required, 404 as "no room", 401/403 as a token fault, URL encoding, PUT body, DELETE | pass |
 | Registry service: auth (no token, wrong token, prefix), create/replace/read/delete, uri and code validation, oversized body, persistence across a restart, trailing state | pass (36 checks) |
-| `apply()` registers one page, one panel with a launcher, one card, adds one style, cleanup callable | pass |
+| `/meet` matcher: bare, after space, newline, bracket and quote; ignores text after the cursor; rejects longer words, trailing space, bare word, URLs, word suffixes, partials and null input; does not mutate input | pass |
+| `apply()` registers one page, one panel with a launcher, one composer completion, one card, adds one style, cleanup callable | pass |
 
 Bugs these tests found, rather than luck:
 
@@ -137,6 +138,8 @@ Read from `block/buzz-app` rather than guessed:
 | Can a plugin post a message? | No — "no editor commands, new socket, or implied access grant" | `docs/plugin-architecture.md:1498` |
 | Can a plugin write the channel canvas? | No such service exists; canvas is a bundled Channels feature | `src/app/services.ts` |
 | Can a plugin write artifact storage? | No — the public interface is `open`, `get`, `page`, `subscribe` | `src/features/artifact-storage/types.ts:62` |
+| Can a plugin hook the composer with a command? | **Yes** — `ctx.conversation.registerCompletion({ id, title, match, component })`. `match` is pure syntax over `{ text, start, end }`; the headless component publishes `{ items }`, and a selected item's `edit.text` replaces the matched range | `src/features/conversation/service.tsx:84`, `contracts.ts:442` |
+| Does the host draw the suggestion list? | Yes — a bundled provider returns null from its component and only publishes, e.g. `EmojiCompletion` | `src/bundled/emoji/EmojiCompletion.tsx:200` |
 
 The registry exists because of the last three lines.
 
@@ -153,6 +156,11 @@ The registry exists because of the last three lines.
 - **POST bodies through `host.request`.** The exchange and refresh send
   `application/x-www-form-urlencoded` bodies. The documented `HostRequest` carries a `body` string
   and headers, but nothing states the content type survives — untested here.
+- **The `/meet` completion has never rendered in the real app.** The contract is read from
+  `Conversation.registerCompletion` and copied from `EmojiCompletion`, which publishes and returns
+  null. Whether `/` is a trigger the host already owns, and whether it prefers a plugin's provider
+  over a built-in one, is not stated anywhere I could read. If nothing appears, the trigger character
+  is the first thing to change.
 - **The launcher has never rendered in the real app.** The registration shape is copied from
   `bundled/huddles`, including `matches: () => false` and a `component` that returns null, because
   the panel is never opened. That the host accepts a panel it can never open is inferred, not seen.

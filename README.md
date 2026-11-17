@@ -141,6 +141,15 @@ origin to the manifest. Its tooltip carries the room's meeting code.
 The host sorts launchers by key, and only the huddle and GitHub controls rank above zero, so this
 one renders to their left.
 
+### `/meet` in the composer
+
+Type `/meet` in any channel or DM. The composer offers **Insert the Meet link**, and accepting it
+replaces the command with that conversation's room link. If the conversation has no room yet, one is
+created first — the same room the launcher would make.
+
+The message is still sent by you: a plugin cannot send one. The host replaces exactly the `/meet`
+text, so the link lands where you typed it, and the room is recorded either way.
+
 ### Why a registry, and not the relay
 
 The plugin API has no write path into Buzz: `ctx.conversation` contributes UI but never sends, and
