@@ -98,6 +98,32 @@ Deliberately not `calendar` (full read-write): the plugin has no reason to chang
 - **Nothing is cached.** Every read is live, so a meeting you just created is there.
 - Never run on Windows. macOS is untested.
 
+## Installing for a team
+
+A plugin installs into one machine, not into the relay. There is no relay-side plugin
+store: the registry is `registry.json` in the app data folder
+(`~/Library/Application Support/xyz.block.buzz.desktop/` on macOS).
+
+Buzz can *recommend* a plugin across a team, which still needs one confirmation per person.
+Write `managed-plugins.json` into the app data folder of each machine:
+
+| OS | Path |
+| --- | --- |
+| macOS | `~/Library/Application Support/xyz.block.buzz.desktop/managed-plugins.json` |
+| Windows | `%APPDATA%\xyz.block.buzz.desktop\managed-plugins.json` |
+| Linux | `${XDG_DATA_HOME:-~/.local/share}/xyz.block.buzz.desktop/managed-plugins.json` |
+
+`managed-plugins.example.json` in this repository is a working file. Update its `commit` to
+the revision you have tested — a pin, so everyone gets the same code:
+
+```bash
+git rev-parse HEAD
+```
+
+The entry then appears under **Settings → Plugins** as "Recommended by Fiction". The person
+still reviews the grants and presses install; the file never installs, enables or updates
+anything itself. Delete it to withdraw the recommendation.
+
 ## Development
 
 Nothing to build: `plugin.js` is the shipped module, and Node runs the tests.

@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "source": "Fiction",
+  "plugins": [
+    {
+      "id": "com.buzzplugins.meet",
+      "repository": "https://github.com/officefiction/buzz-plugins",
+      "reference": "main",
+      "commit": "e20cb04d893d2193ec6d951915008d4c61d51269",
+      "path": "."
+    }
+  ]
+}

@@ -81,6 +81,22 @@ check(
   ),
 );
 
+// The managed-plugin example is what a team drops into their app data folder.
+// Rules from block/buzz-app docs/managed-plugins.md.
+const managed = JSON.parse(readFileSync(new URL("managed-plugins.example.json", import.meta.url), "utf8"));
+check("managed policy is version 1", managed.version === 1);
+check("managed policy names a source", typeof managed.source === "string" && managed.source.trim().length >= 1 && managed.source.trim().length <= 80);
+check("managed policy lists one plugin", Array.isArray(managed.plugins) && managed.plugins.length === 1);
+const entry = managed.plugins[0];
+check("managed entry names this plugin", entry.id === manifest.id, entry.id);
+check("managed entry id is a legal manifest id", /^[a-z][a-z0-9.-]*$/.test(entry.id), entry.id);
+check("managed entry points at a repository", /^https:\/\/github\.com\/[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/.test(entry.repository), entry.repository);
+check("managed entry has no credentials in the URL", /\/\/[^/@]+@/.test(entry.repository) === false);
+check("managed entry pins a full 40-digit commit", /^[0-9a-f]{40}$/i.test(entry.commit), entry.commit);
+check("managed entry names a reference", /^[A-Za-z0-9._/-]{1,200}$/.test(entry.reference), entry.reference);
+check("managed entry path is canonical", entry.path === "." || /^[A-Za-z0-9._-]+(\/[A-Za-z0-9._-]+)*$/.test(entry.path), entry.path);
+check("managed entry has no unknown fields", Object.keys(entry).every((k) => ["id", "repository", "reference", "commit", "path"].includes(k)));
+
 // --- apply() smoke test with a stub host -----------------------------------
 global.window = {
   localStorage: (() => {
