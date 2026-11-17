@@ -61,6 +61,25 @@ check(
   origins.every((o) => /^https:\/\/[a-z0-9.-]+(:\d+)?$/i.test(o)),
   origins.join(", "),
 );
+check("no iCal origin remains", !origins.some((o) => /calendar\.google\.com/i.test(o)));
+check("exactly the three API origins", origins.length === 3, origins.join(", "));
+
+// The plugin's own identity must not carry a company name. The README is left
+// out on purpose: it holds the public repository URL you install from. This
+// file is left out because the forbidden words are listed right here.
+const SOURCES = ["plugin.js", "manifest.json", "package.json", "NOTES.md"];
+const NAMES = ["officefiction", "schramp"];
+for (const file of SOURCES) {
+  const text = readFileSync(new URL(file, import.meta.url), "utf8");
+  const hits = NAMES.filter((name) => text.toLowerCase().includes(name));
+  check(`${file} carries no private naming`, hits.length === 0, hits.join(", "));
+}
+check(
+  "plugin.js has no iCal code left",
+  !/parseCalendar|basic\.ics|isPublicFeed|civilToInstant/.test(
+    readFileSync(new URL("plugin.js", import.meta.url), "utf8"),
+  ),
+);
 
 // --- apply() smoke test with a stub host -----------------------------------
 global.window = {

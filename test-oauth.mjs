@@ -117,14 +117,25 @@ check("no link when only a phone entry point", api[1].meetUrl, undefined);
 check("video entry point used", api[2].meetUrl, "https://meet.google.com/xyz-1234-abc");
 check("all-day flagged", api[3].allDay, true);
 check("all-day keeps a date", api[3].start.toISOString(), "2026-11-22T00:00:00.000Z");
-check("duration carried", (api[0].endCivil - api[0].startCivil) / 60000, 60);
+check("duration carried", (api[0].end - api[0].start) / 60000, 60);
 check("empty response", eventsFromApi({}), []);
+check(
+  "a missing end defaults to 30 minutes",
+  (() => {
+    const one = eventsFromApi({ items: [{ id: "z", status: "confirmed", summary: "Z", start: { dateTime: "2026-11-25T10:00:00Z" } }] });
+    return (one[0].end - one[0].start) / 60000;
+  })(),
+  30,
+);
 
-// The API objects must feed upcoming() unchanged.
+// --- upcoming(): window, order, de-duplication ----------------------------
 const { upcoming } = await import("./plugin.js");
 const slots = upcoming(api, Date.parse("2026-11-18T00:00:00Z"), 14);
-check("upcoming accepts API events", slots.length, 4); // 18th, 19th, 20th, all-day 22nd
+check("upcoming keeps what is in the window", slots.length, 4); // 18th, 19th, 20th, all-day 22nd
 check("soonest first", slots[0].summary, "Design review");
+check("nothing in a later window", upcoming(api, Date.parse("2026-12-30T00:00:00Z"), 14).length, 0);
+check("anything older than an hour is dropped", upcoming(api, Date.parse("2026-11-19T18:00:00Z"), 14).length, 2);
+check("same uid and start counted once", upcoming([api[0], api[0]], Date.parse("2026-11-18T00:00:00Z"), 14).length, 1);
 
 console.log(fail === 0 ? "\nALL CHECKS PASSED" : `\n${fail} CHECK(S) FAILED`);
 process.exit(fail === 0 ? 0 : 1);

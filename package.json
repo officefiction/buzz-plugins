@@ -1,10 +1,10 @@
 {
-  "name": "fiction-meet-plugin",
-  "version": "0.3.0",
+  "name": "buzz-meet-plugin",
+  "version": "0.4.0",
   "private": true,
   "type": "module",
   "description": "Buzz plugin: your next Google Meet calls, with Join and instant-meeting buttons.",
   "scripts": {
-    "test": "node test.mjs && node test-dst.mjs && node test-address.mjs && node test-oauth.mjs && node test-vault.mjs && node check.mjs"
+    "test": "node test-oauth.mjs && node test-vault.mjs && node check.mjs"
   }
 }

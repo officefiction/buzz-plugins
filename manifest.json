@@ -1,8 +1,8 @@
 {
-  "id": "com.officefiction.meet",
+  "id": "com.buzzplugins.meet",
   "name": "Meet",
   "apiVersion": 1,
-  "description": "Your next Google Meet calls inside Buzz, with a Join button that opens them in your browser. First step: paste your calendar's secret iCal address in Settings, Meet.",
+  "description": "Your next Google Meet calls inside Buzz: a Join button that opens the meeting in your browser, and one to start a meeting now. First step: connect Google in Settings, Meet.",
   "discovery": {
     "category": "productivity",
     "tags": ["Google Meet", "Calendar", "Calls"]
@@ -33,7 +33,7 @@
       {
         "id": "secret-save",
         "program": "secret-tool",
-        "args": ["store", "--label=Google Calendar iCal address (Buzz)", "service", "buzz-meet", "account", "meet"],
+        "args": ["store", "--label=Meeting assistant (Buzz)", "service", "buzz-meet", "account", "meet"],
         "maxInputBytes": 2048
       },
       {
@@ -43,7 +43,6 @@
       }
     ],
     "networkOrigins": [
-      "https://calendar.google.com",
       "https://www.googleapis.com",
       "https://meet.googleapis.com",
       "https://oauth2.googleapis.com"

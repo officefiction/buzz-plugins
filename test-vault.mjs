@@ -35,20 +35,20 @@ const vault = createVault(store);
 
 check("empty store reads as empty object", vault.read(), {});
 
-await vault.write({ ical: "https://calendar.google.com/calendar/ical/x/basic.ics" });
-check("first write stored", JSON.parse(store.raw()).ical, "https://calendar.google.com/calendar/ical/x/basic.ics");
+await vault.write({ label: "work" });
+check("first write stored", JSON.parse(store.raw()).label, "work");
 
 await vault.write({ refreshToken: "1//rt" });
 check("second write merges", vault.read(), {
-  ical: "https://calendar.google.com/calendar/ical/x/basic.ics",
+  label: "work",
   refreshToken: "1//rt",
 });
 
 await vault.write({ verifier: "abc" });
-check("three keys at once", Object.keys(vault.read()).sort(), ["ical", "refreshToken", "verifier"]);
+check("three keys at once", Object.keys(vault.read()).sort(), ["label", "refreshToken", "verifier"]);
 
 await vault.write({ verifier: undefined });
-check("undefined removes the key", Object.keys(vault.read()).sort(), ["ical", "refreshToken"]);
+check("undefined removes the key", Object.keys(vault.read()).sort(), ["label", "refreshToken"]);
 
 // A store holding something that is not JSON must not throw on every render.
 const broken = createVault(fakeStore("not json at all"));
@@ -72,7 +72,7 @@ const notSaving = createVault({
     return false;
   },
 });
-check("a refused save is reported, not swallowed", (await notSaving.write({ ical: "x" })).kept, false);
+check("a refused save is reported, not swallowed", (await notSaving.write({ label: "x" })).kept, false);
 
 console.log(fail === 0 ? "\nALL CHECKS PASSED" : `\n${fail} CHECK(S) FAILED`);
 process.exit(fail === 0 ? 0 : 1);
