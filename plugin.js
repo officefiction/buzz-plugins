@@ -513,6 +513,142 @@ async function fetchCalendar(host, address) {
 }
 
 // ---------------------------------------------------------------------------
+// Google OAuth (Calendar API + Meet API)
+//
+// An installed-app flow with PKCE, as Google documents it for desktop clients
+// (developers.google.com/identity/protocols/oauth2/native-app). The browser is
+// the system browser — Google refuses OAuth inside an embedded webview — and
+// nothing listens on the loopback port, so the browser lands on an error page
+// whose address bar carries the code. The user pastes that address back here.
+//
+// The client ID and secret belong to the user's own Google Cloud project.
+// ---------------------------------------------------------------------------
+
+const GOOGLE_SCOPES = [
+  "https://www.googleapis.com/auth/calendar.events.readonly",
+  "https://www.googleapis.com/auth/meetings.space.created",
+];
+
+export const AUTH_ENDPOINT = "https://accounts.google.com/o/oauth2/v2/auth";
+export const TOKEN_ENDPOINT = "https://oauth2.googleapis.com/token";
+export const LOOPBACK_REDIRECT = "http://127.0.0.1:8765";
+
+const UNRESERVED = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~";
+
+/** A PKCE code verifier: 64 characters from the unreserved set, per RFC 7636. */
+export function makeVerifier(randomBytes) {
+  const bytes = randomBytes ?? crypto.getRandomValues(new Uint8Array(64));
+  let out = "";
+  for (let i = 0; i < 64; i += 1) out += UNRESERVED[bytes[i] % UNRESERVED.length];
+  return out;
+}
+
+export function base64url(bytes) {
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+/** S256: the base64url of the SHA-256 of the verifier. */
+export async function challengeFor(verifier) {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier));
+  return base64url(new Uint8Array(digest));
+}
+
+export function buildAuthUrl({ clientId, challenge, redirectUri = LOOPBACK_REDIRECT, scopes = GOOGLE_SCOPES }) {
+  const params = new URLSearchParams({
+    client_id: clientId,
+    redirect_uri: redirectUri,
+    response_type: "code",
+    scope: scopes.join(" "),
+    code_challenge: challenge,
+    code_challenge_method: "S256",
+    access_type: "offline", // asks for a refresh token
+    prompt: "consent", // forces a refresh token even on a repeat authorisation
+  });
+  return AUTH_ENDPOINT + "?" + params.toString();
+}
+
+/** Reads the code, or the reason there is none, out of whatever the browser showed. */
+export function parseRedirect(pasted) {
+  const text = String(pasted ?? "").trim();
+  if (!text) return { ok: false, reason: "empty" };
+  let query;
+  try {
+    query = new URL(text).searchParams;
+  } catch {
+    // A browser shows a full address, but a bare query string is just as valid.
+    const mark = text.indexOf("?");
+    query = new URLSearchParams(mark < 0 ? text : text.slice(mark + 1));
+  }
+  const error = query.get("error");
+  if (error) return { ok: false, reason: error };
+  const code = query.get("code");
+  if (!code) return { ok: false, reason: "no code in that address" };
+  return { ok: true, code };
+}
+
+export function exchangeBody({ code, verifier, clientId, clientSecret, redirectUri = LOOPBACK_REDIRECT }) {
+  return new URLSearchParams({
+    grant_type: "authorization_code",
+    code,
+    code_verifier: verifier,
+    client_id: clientId,
+    client_secret: clientSecret,
+    redirect_uri: redirectUri,
+  }).toString();
+}
+
+export function refreshBody({ refreshToken, clientId, clientSecret }) {
+  return new URLSearchParams({
+    grant_type: "refresh_token",
+    refresh_token: refreshToken,
+    client_id: clientId,
+    client_secret: clientSecret,
+  }).toString();
+}
+
+/**
+ * Maps a Calendar API events.list response into the same shape the iCal reader
+ * produces, so upcoming() needs no change. singleEvents=true means Google has
+ * already expanded recurrences, so no rrule is carried.
+ */
+export function eventsFromApi(json) {
+  const out = [];
+  for (const item of json?.items ?? []) {
+    if (item.status === "cancelled") continue;
+    const allDay = Boolean(item.start?.date);
+    const startText = item.start?.dateTime ?? item.start?.date;
+    const endText = item.end?.dateTime ?? item.end?.date;
+    if (!startText) continue;
+    const startMs = Date.parse(startText);
+    if (Number.isNaN(startMs)) continue;
+    const endMs = endText ? Date.parse(endText) : startMs + 30 * 60_000;
+    const meetUrl =
+      item.hangoutLink ||
+      (item.conferenceData?.entryPoints ?? []).find((entry) => entry.entryPointType === "video")?.uri ||
+      MEET_LINK.exec(item.location ?? "")?.[0] ||
+      MEET_LINK.exec(item.description ?? "")?.[0] ||
+      undefined;
+    out.push({
+      startCivil: startMs,
+      endCivil: Number.isNaN(endMs) ? startMs + 30 * 60_000 : endMs,
+      timeZone: undefined, // the API sends offsets, so the instant is exact
+      start: new Date(startMs),
+      summary: item.summary || "Busy",
+      location: item.location,
+      meetUrl,
+      uid: item.iCalUID || item.id,
+      allDay,
+      exdates: [],
+    });
+  }
+  return out;
+}
+
+
+
+// ---------------------------------------------------------------------------
 // Text
 // ---------------------------------------------------------------------------
 
