@@ -39,6 +39,11 @@ format**. It looks like:
 https://calendar.google.com/calendar/ical/<id>/private-<token>/basic.ics
 ```
 
+> **Not the public address.** The entry marked *Public address in iCal format*
+> (`…/public/basic.ics`) also loads, but Google strips it: every event that is not public arrives
+> as `SUMMARY:Busy`, with no summary, no location and **no Meet link**. A calendar of private
+> events read through the public address looks empty. The plugin now says so when it sees one.
+
 It is a private, read-only link to **one** calendar. Anyone who has it can read that calendar, so
 treat it like a password. It is sent only to `calendar.google.com`.
 

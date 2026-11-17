@@ -491,6 +491,15 @@ function isCalendarAddress(value) {
   return /^https:\/\/calendar\.google\.com\/calendar\/ical\/[^\s]+\/basic\.ics$/i.test(value.trim());
 }
 
+// Google's public feed is not the same data as the secret one: every event that
+// is not public arrives as SUMMARY:Busy with no details and no Meet link, and
+// Google caches it hard.
+export function isPublicFeed(value) {
+  return /\/public\/basic\.ics$/i.test(String(value ?? "").trim());
+}
+
+export { isCalendarAddress };
+
 async function fetchCalendar(host, address) {
   const response = await host.request({
     url: address,
@@ -578,7 +587,16 @@ function createMeetPage({ React, credentials, host, openSettings }) {
       }
       try {
         const events = await fetchCalendar(host, address);
-        setState({ status: "ready", slots: upcoming(events, Date.now()) });
+        setState({
+          status: "ready",
+          slots: upcoming(events, Date.now()),
+          read: events.length,
+          redacted: events.length > 0 && events.every((event) => event.summary === "Busy"),
+          lastStart: events.length
+            ? new Date(Math.max(...events.map((event) => event.start.getTime())))
+            : null,
+          publicFeed: isPublicFeed(address),
+        });
       } catch (error) {
         setState({ status: "error", reason: error.message });
       }
@@ -639,10 +657,31 @@ function createMeetPage({ React, credentials, host, openSettings }) {
     const [next, ...rest] = state.slots ?? [];
 
     if (!next) {
+      // Say what was actually read. "Nothing here" and "nothing readable here"
+      // look identical otherwise, and the second one is a setup fault.
+      const notes = [];
+      if (state.publicFeed) {
+        notes.push(
+          "This is the calendar's public address. Google hides event details from it: every event arrives as “Busy”, with no summary and no Meet link.",
+        );
+        notes.push(
+          "Use the secret address instead — Google Calendar → Settings and sharing → Integrate calendar → Secret address in iCal format.",
+        );
+      } else if (!state.read) {
+        notes.push("The feed was read, but it holds no events.");
+      } else {
+        const last = state.lastStart
+          ? new Intl.DateTimeFormat(undefined, { dateStyle: "medium" }).format(state.lastStart)
+          : "an unknown date";
+        notes.push(
+          `Read ${state.read} event${state.read === 1 ? "" : "s"}; the latest starts ${last}. Nothing starts in the next ${LOOKAHEAD_DAYS} days.`,
+        );
+      }
       return h(
         "div",
         { className: "ofm-page" },
-        h("p", { className: "ofm-lead" }, `Nothing with a meeting in the next ${LOOKAHEAD_DAYS} days.`),
+        h("h2", { className: "ofm-title" }, "Nothing coming up"),
+        notes.map((text, index) => h("p", { className: "ofm-lead", key: index }, text)),
         h(
           "div",
           { className: "ofm-actions" },
@@ -727,6 +766,7 @@ function createSettingsCard({ React, credentials, host }) {
     }, []);
 
     const storeName = STORE_LABEL[credentials.store()] ?? null;
+    const publishedFeed = isPublicFeed(address) || (saved && isPublicFeed(credentials.read()));
 
     const save = async () => {
       const value = address.trim();
@@ -806,6 +846,14 @@ function createSettingsCard({ React, credentials, host }) {
           ? h("button", { className: "ofm-button", type: "button", disabled: busy, onClick: () => void clear() }, "Remove")
           : null,
       ),
+      publishedFeed
+        ? h(
+            "p",
+            { className: "ofm-error" },
+            "That is the public address. Google hides event details from it: every event arrives as “Busy”, with no summary and no Meet link. " +
+              "Use the secret address instead — Google Calendar → Settings and sharing → Integrate calendar → Secret address in iCal format.",
+          )
+        : null,
       message
         ? h("p", { className: message.kind === "error" ? "ofm-error" : "ofm-status" }, message.text)
         : null,

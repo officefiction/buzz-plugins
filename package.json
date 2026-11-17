@@ -5,6 +5,6 @@
   "type": "module",
   "description": "Buzz plugin: the next Google Meet calls, with a Join button that opens the browser.",
   "scripts": {
-    "test": "node test.mjs && node test-dst.mjs && node check.mjs"
+    "test": "node test.mjs && node test-dst.mjs && node test-address.mjs && node check.mjs"
   }
 }

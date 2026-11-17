@@ -94,6 +94,27 @@ Two bugs were found and fixed by these tests rather than by luck:
 - **`placement: "sidebar"`** is from the `Page` type. Whether the host honours it for an installed
   plugin is unconfirmed; if the page does not appear in the sidebar, drop that one line.
 
+## Found in the field
+
+The first real install added the **public** calendar address, not the secret one, and the page
+showed nothing. The feed was fetched and parsed to find out why:
+
+| Observed | Cause |
+| --- | --- |
+| 21 events parsed | the feed is real and the parser reads it |
+| **21 of 21 titled `Busy`** | Google redacts every non-public event in a public feed |
+| **0 with a Meet link** | details are stripped with the summary |
+| latest event 2026-11-16, page empty on 2026-11-17 | every event in the feed was already in the past |
+
+So the plugin was correct and the address was wrong. Two changes came from it:
+
+- `isPublicFeed()` marks a `…/public/basic.ics` address, and the settings card warns as soon as one
+  is typed or saved
+- The empty page now says what it read — "Read N events; the latest starts <date>" — and names the
+  public-address fault directly instead of showing a bare "nothing coming up"
+
+Covered by `test-address.mjs`.
+
 ## Known gaps in behaviour
 
 - `RECURRENCE-ID` overrides (a single edited instance) are ignored; the master rule is used.
