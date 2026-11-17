@@ -97,6 +97,20 @@ compared against the series start instead of each occurrence, and repeated times
 UTC so a weekly 10:00 meeting became 09:00 after the clocks changed. Both mattered only to that
 path, which has since been removed — the Calendar API expands recurrences itself.
 
+## The Meet mark
+
+The launcher's icon is the Google Meet mark, inlined into `plugin.js` as an SVG data URI and
+recoloured per state: `#9aa0a6` grey when the conversation has no room, `#fbbc04` yellow when it
+has one, each with a lighter face underneath.
+
+| | |
+| --- | --- |
+| Shape | `File:Google Meet icon (2026).svg`, Wikimedia Commons |
+| Copyright | **Public domain** per Commons (below the threshold of originality); attribution not required |
+| Trademark | Commons flags it `Restricted: trademarked`. It is Google's mark, so it is used only to label a Google Meet feature, and nothing here implies Google endorses this plugin. |
+| Draw order | wing, body, inset face, play — as in the source; the play path runs past the `viewBox` and is clipped by it in the original too, so the frame is unchanged |
+| Fetched at runtime | no |
+
 ## Findings behind the room launcher
 
 Read from `block/buzz-app` rather than guessed:

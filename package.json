@@ -1,10 +1,10 @@
 {
   "name": "buzz-meet-plugin",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "private": true,
   "type": "module",
   "description": "Buzz plugin: your next Google Meet calls, with Join and instant-meeting buttons.",
   "scripts": {
-    "test": "node test-oauth.mjs && node test-vault.mjs && node test-registry.mjs && node check.mjs"
+    "test": "node test-oauth.mjs && node test-vault.mjs && node test-registry.mjs && node test-icon.mjs && node check.mjs"
   }
 }

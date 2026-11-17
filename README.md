@@ -126,14 +126,17 @@ anything itself. Delete it to withdraw the recommendation.
 
 ## Per-conversation rooms
 
-A **Meet** button sits in the channel and DM header, to the left of the huddle control. It gives
-each conversation one Meet room, the same room for everyone on the team:
+A **Meet** icon button sits in the channel and DM header, to the left of the huddle control. It
+gives each conversation one Meet room, the same room for everyone on the team:
 
-| State | The button is | Pressing it |
+| State | The icon is | Pressing it |
 | --- | --- | --- |
-| the conversation has no room | a button, "Meet" | creates a Meet space and records it |
-| the conversation has a room | a link, "Meet" | opens the room in your browser |
+| the conversation has no room | **grey** | creates a Meet space and records it |
+| the conversation has a room | **yellow** | opens the room in your browser |
 | no registry token is set | absent | — |
+
+The mark is inlined as an SVG data URI — no image is fetched, so it renders offline and adds no
+origin to the manifest. Its tooltip carries the room's meeting code.
 
 The host sorts launchers by key, and only the huddle and GitHub controls rank above zero, so this
 one renders to their left.

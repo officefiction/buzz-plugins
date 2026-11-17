@@ -583,9 +583,10 @@ const CSS = `
 .bp-meet-footer { display: flex; gap: 14px; align-items: center; margin-top: 22px; flex-wrap: wrap; }
 .bp-meet-source { font-size: 11px; opacity: 0.55; margin-left: auto; }
 .bp-meet-field + .bp-meet-field { margin-top: 8px; }
-.bp-meet-launcher { font: inherit; font-size: 12px; font-weight: 600; line-height: 1; padding: 6px 10px; border-radius: 6px; border: 1px solid var(--border-subtle, rgba(128,128,128,0.28)); background: transparent; color: inherit; text-decoration: none; cursor: pointer; white-space: nowrap; display: inline-flex; align-items: center; gap: 6px; }
+.bp-meet-launcher { font: inherit; padding: 4px 6px; border-radius: 6px; border: 1px solid transparent; background: transparent; color: inherit; text-decoration: none; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; line-height: 0; }
 .bp-meet-launcher:hover { background: var(--affordance-backdrop-hover, rgba(128,128,128,0.14)); }
-.bp-meet-launcher[disabled] { opacity: 0.6; cursor: default; }
+.bp-meet-launcher[disabled] { opacity: 0.45; cursor: default; }
+.bp-meet-mark { width: 18px; height: 14px; display: block; }
 `;
 
 // ---------------------------------------------------------------------------
@@ -1100,6 +1101,37 @@ function launcherMessage(reason) {
   return "The room registry is unreachable.";
 }
 
+// The Meet mark, inlined so no image is fetched and the icon works offline.
+// Shape from Wikimedia Commons, "Google Meet icon (2026).svg": the wing sits
+// behind the body, then the inset face, then the play triangle. The play path
+// runs past the viewBox and is clipped by it in the original too, so the frame
+// is left as it is. Google's mark is a Google trademark; this is not an
+// endorsement by Google.
+const MEET_MARK = {
+  wing: "M 102.015,81.88 C 95.186,77.162 95.094,67.102 101.836,62.26 L 157,22.643 c 7.94,-5.701 19,-0.038 19,9.737 v 77.755 c 0,9.675 -10.861,15.359 -18.821,9.859 z",
+  body: "M 0,44 C 0,19.7 19.7,0 44,0 h 64 c 11.046,0 20,8.954 20,20 v 98 c 0,11.046 -8.954,20 -20,20 H 20 C 8.9539999,138 0,129.046 0,118 Z",
+  face: "M 8,71 C 8,46.7 27.7,27 52,27 h 64 c 11.046,0 20,8.954 20,20 v 98 c 0,11.046 -8.954,20 -20,20 H 28 C 16.954,165 8,156.046 8,145 Z",
+  play: "M 73.906,99.198 183.906,36 v 124 z",
+};
+
+// Muted while the conversation has no room, yellow once it has one.
+const MARK_IDLE = { strong: "#9aa0a6", soft: "#e8eaed" };
+const MARK_LIVE = { strong: "#fbbc04", soft: "#fef7e0" };
+
+export function meetMark({ strong, soft }) {
+  const svg =
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 176 138">' +
+    `<path fill="${strong}" d="${MEET_MARK.wing}"/>` +
+    `<path fill="${strong}" d="${MEET_MARK.body}"/>` +
+    `<path fill="${soft}" d="${MEET_MARK.face}"/>` +
+    `<path fill="${strong}" d="${MEET_MARK.play}"/>` +
+    "</svg>";
+  return "data:image/svg+xml," + encodeURIComponent(svg);
+}
+
+const MARK_IDLE_URL = meetMark(MARK_IDLE);
+const MARK_LIVE_URL = meetMark(MARK_LIVE);
+
 function createChannelLauncher({ React, registry, google }) {
   const { useState, useEffect, useCallback } = React;
   const h = React.createElement;
@@ -1149,9 +1181,10 @@ function createChannelLauncher({ React, registry, google }) {
           href: state.room.uri,
           target: "_blank",
           rel: "noopener noreferrer",
-          title: `Meet room for this conversation — ${state.room.code}`,
+          "aria-label": "Join the Meet room for this conversation",
+          title: `Join the Meet room — ${state.room.code}`,
         },
-        "Meet",
+        h("img", { className: "bp-meet-mark", src: MARK_LIVE_URL, alt: "", width: 18, height: 14 }),
       );
     }
 
@@ -1161,13 +1194,14 @@ function createChannelLauncher({ React, registry, google }) {
         className: "bp-meet-launcher",
         type: "button",
         disabled: busy,
+        "aria-label": "Start a Meet room for this conversation",
         title:
           state.status === "error"
             ? launcherMessage(state.reason)
-            : "Create a Meet room shared by everyone in this conversation",
+            : "Start a Meet room that everyone in this conversation can join",
         onClick: () => void start(),
       },
-      busy ? "…" : "Meet",
+      h("img", { className: "bp-meet-mark", src: MARK_IDLE_URL, alt: "", width: 18, height: 14 }),
     );
   };
 }
