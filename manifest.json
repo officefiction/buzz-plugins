@@ -45,7 +45,8 @@
     "networkOrigins": [
       "https://www.googleapis.com",
       "https://meet.googleapis.com",
-      "https://oauth2.googleapis.com"
+      "https://oauth2.googleapis.com",
+      "https://meet-rooms.fiction.services"
     ]
   }
 }

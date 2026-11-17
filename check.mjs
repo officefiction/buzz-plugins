@@ -62,7 +62,12 @@ check(
   origins.join(", "),
 );
 check("no iCal origin remains", !origins.some((o) => /calendar\.google\.com/i.test(o)));
-check("exactly the three API origins", origins.length === 3, origins.join(", "));
+check("declares the three Google origins and the registry", origins.length === 4, origins.join(", "));
+check(
+  "the fourth origin is the room registry",
+  origins.filter((o) => /meet-rooms/.test(o)).length === 1,
+  origins.join(", "),
+);
 
 // The plugin's own identity must not carry a company name. The README is left
 // out on purpose: it holds the public repository URL you install from. This
@@ -126,6 +131,7 @@ const { apply, inject } = await import("./plugin.js");
 check("inject lists the services used", Array.isArray(inject) && inject.includes("pages") && inject.includes("host"));
 
 const pages = [];
+const panels = [];
 const cards = [];
 const cleanups = [];
 let opened = null;
@@ -142,6 +148,7 @@ const ctx = {
   },
   navigation: { open: async (target) => ((opened = target), {}) },
   pages: { register: (page) => pages.push(page) },
+  panels: { register: (panel) => panels.push(panel) },
   settingsCards: { register: (card) => cards.push(card) },
   effect: (setup) => {
     const cleanup = setup();
@@ -155,6 +162,13 @@ apply(ctx);
 check("registers exactly one page", pages.length === 1, String(pages.length));
 check("page has id, title and a component", Boolean(pages[0]?.id && pages[0]?.title && typeof pages[0]?.component === "function"));
 check("page id matches the manifest namespace", pages[0]?.id === "meet", pages[0]?.id);
+check("registers exactly one panel", panels.length === 1, String(panels.length));
+check("the panel contributes a channel launcher", typeof panels[0]?.channelLauncher === "function");
+check("the panel is never opened by matching", panels[0]?.matches("anything") === false);
+check("the launcher renders a component", (() => {
+  const rendered = panels[0].channelLauncher({ context: { channelId: "c1", scope: "s", viewer: "v" } });
+  return Boolean(rendered && rendered.type);
+})());
 check("registers exactly one settings card", cards.length === 1, String(cards.length));
 check("card has id, title, group and a component", Boolean(cards[0]?.id && cards[0]?.title && cards[0]?.group && typeof cards[0]?.component === "function"));
 check("adds one style element", appended.length === 1, String(appended.length));

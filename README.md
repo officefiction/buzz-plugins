@@ -124,6 +124,43 @@ The entry then appears under **Settings → Plugins** as "Recommended by Fiction
 still reviews the grants and presses install; the file never installs, enables or updates
 anything itself. Delete it to withdraw the recommendation.
 
+## Per-conversation rooms
+
+A **Meet** button sits in the channel and DM header, to the left of the huddle control. It gives
+each conversation one Meet room, the same room for everyone on the team:
+
+| State | The button is | Pressing it |
+| --- | --- | --- |
+| the conversation has no room | a button, "Meet" | creates a Meet space and records it |
+| the conversation has a room | a link, "Meet" | opens the room in your browser |
+| no registry token is set | absent | — |
+
+The host sorts launchers by key, and only the huddle and GitHub controls rank above zero, so this
+one renders to their left.
+
+### Why a registry, and not the relay
+
+The plugin API has no write path into Buzz: `ctx.conversation` contributes UI but never sends, and
+`ctx.artifactStorage` exposes `get` and `page` only. A plugin therefore cannot publish a room to a
+channel, and cannot write the canvas.
+
+So the mapping lives in a small service, `meet-rooms.fiction.services`, keyed by channel id:
+
+```
+PUT    /rooms/<channelId>   { uri, code }   -> the room for that conversation
+GET    /rooms/<channelId>                   -> 200 room, or 404
+DELETE /rooms/<channelId>                   -> forget it
+```
+
+Source and compose file: `registry/` in this repository. One bearer token guards every route; the
+token is stored in the system credential store beside the Google credentials.
+
+Set the token once per person in **Settings → Plugins → Meet → Shared rooms**. Without it the
+launcher stays hidden, so a missing token costs nothing.
+
+This is also where transcripts will hang later: Meet's `conferenceRecords` are per space, and a
+space is per conversation, so the room record is the join.
+
 ## Development
 
 Nothing to build: `plugin.js` is the shipped module, and Node runs the tests.

@@ -80,8 +80,10 @@ Run on Node 22, `npm test`:
 | `upcoming()`: window filter, order, de-duplication | pass |
 | Vault: merge, key removal, corrupt and non-object documents, a refused save | pass |
 | Manifest: allowed keys, byte limits, category slug, program and argument rules | pass |
-| Naming and origin hygiene: no company name in the plugin, exactly three API origins | pass |
-| `apply()` registers one page and one card, adds one style, cleanup callable | pass |
+| Naming and origin hygiene: no company name in the plugin, four origins including the registry | pass |
+| Registry client: token required, 404 as "no room", 401/403 as a token fault, URL encoding, PUT body, DELETE | pass |
+| Registry service: auth (no token, wrong token, prefix), create/replace/read/delete, uri and code validation, oversized body, persistence across a restart, trailing state | pass (36 checks) |
+| `apply()` registers one page, one panel with a launcher, one card, adds one style, cleanup callable | pass |
 
 Bugs these tests found, rather than luck:
 
@@ -94,6 +96,22 @@ Earlier, while the plugin still read iCal feeds, the same discipline caught two 
 compared against the series start instead of each occurrence, and repeated times were computed in
 UTC so a weekly 10:00 meeting became 09:00 after the clocks changed. Both mattered only to that
 path, which has since been removed — the Calendar API expands recurrences itself.
+
+## Findings behind the room launcher
+
+Read from `block/buzz-app` rather than guessed:
+
+| Question | Answer | Source |
+| --- | --- | --- |
+| Can a plugin put a control in the channel header? | Yes — `ctx.panels.register({ channelLauncher })` | `src/bundled/huddles/index.tsx:106` |
+| Where does it land relative to huddles? | To the left: launchers sort by `launcherOrder`, which is 2 for `buzz.huddles`, 1 for `buzz.github`, **0 for everything else** | `src/bundled/channels/useChannelPanels.tsx:20` |
+| Do DMs get it too? | Yes — `SoloHeading` takes launchers as children | `ChannelsPage.tsx:2649` |
+| Which channel is it for? | `context.channelId`, passed to the launcher | `useChannelPanels.tsx:170` |
+| Can a plugin post a message? | No — "no editor commands, new socket, or implied access grant" | `docs/plugin-architecture.md:1498` |
+| Can a plugin write the channel canvas? | No such service exists; canvas is a bundled Channels feature | `src/app/services.ts` |
+| Can a plugin write artifact storage? | No — the public interface is `open`, `get`, `page`, `subscribe` | `src/features/artifact-storage/types.ts:62` |
+
+The registry exists because of the last three lines.
 
 ## What was not verified
 
@@ -108,8 +126,16 @@ path, which has since been removed — the Calendar API expands recurrences itse
 - **POST bodies through `host.request`.** The exchange and refresh send
   `application/x-www-form-urlencoded` bodies. The documented `HostRequest` carries a `body` string
   and headers, but nothing states the content type survives — untested here.
-- **`spaces.create` has never been called.** The request shape and the `meetingUri` field are from
-  the reference, not from a response.
+- **The launcher has never rendered in the real app.** The registration shape is copied from
+  `bundled/huddles`, including `matches: () => false` and a `component` that returns null, because
+  the panel is never opened. That the host accepts a panel it can never open is inferred, not seen.
+  If the button does not appear, that shape is the first thing to change.
+- **The registry has only been exercised from this machine**, over HTTPS, with curl and a
+  stand-in host. No Buzz client has talked to it.
+- **The token has not been shared with a second machine**, so "both of you see the same room" is
+  untested end to end; the service side of it is proven.
+- **`spaces.create` has been called once**, successfully, by the plugin's owner — enough to prove
+  the shape, not enough to cover the error paths.
 - **The credential store was not exercised directly.** No `security` or `secret-tool` call was
   made by the tests: they pass a stub runner.
 - **macOS (WKWebView) and Windows were not run.** Linux desktop was not run either.

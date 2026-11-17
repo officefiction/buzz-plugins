@@ -1,0 +1,52 @@
+name: meet-rooms
+
+# A tiny shared registry: Buzz channel id -> Google Meet space, so every client
+# in the workspace joins the same room. The plugin API cannot write to the
+# relay, so the mapping lives here.
+#
+# Deployment: /opt/stacks/meet-rooms/ on the edge host.
+#   compose.yaml  this file
+#   .env          REGISTRY_TOKEN=<32+ random bytes>
+#   server.js     copied from the plugin repository
+
+services:
+  meet-rooms:
+    image: node:22-alpine
+    container_name: meet-rooms
+    restart: unless-stopped
+    command: ["node", "/app/server.js"]
+    environment:
+      PORT: "8080"
+      DATA_FILE: /data/rooms.json
+      REGISTRY_TOKEN: ${REGISTRY_TOKEN:?set REGISTRY_TOKEN in .env}
+    volumes:
+      - ./server.js:/app/server.js:ro
+      - meet-rooms-data:/data
+    labels:
+      traefik.enable: "true"
+      traefik.docker.network: edge
+      traefik.http.routers.meet-rooms.rule: Host(`meet-rooms.fiction.services`)
+      traefik.http.routers.meet-rooms.entrypoints: websecure
+      traefik.http.routers.meet-rooms.tls: "true"
+      traefik.http.routers.meet-rooms.tls.certresolver: cloudflare
+      traefik.http.services.meet-rooms.loadbalancer.server.port: "8080"
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:8080/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    networks:
+      - edge
+    mem_limit: 96m
+
+volumes:
+  meet-rooms-data:
+
+networks:
+  edge:
+    external: true

@@ -15,7 +15,7 @@
  * Plain ES module: Buzz never runs a build.
  */
 
-export const inject = ["react", "pages", "settingsCards", "navigation", "host"];
+export const inject = ["react", "pages", "panels", "settingsCards", "navigation", "host"];
 
 const PLUGIN_ID = "com.buzzplugins.meet";
 const SETTINGS_SECTION = PLUGIN_ID + "/settings";
@@ -425,8 +425,8 @@ function createGoogle({ host, vault }) {
     });
     if (response.status !== 200 && response.status !== 201) throw new Error("meet");
     const json = JSON.parse(response.body || "{}");
-    if (!json.meetingUri) throw new Error("meet");
-    return json.meetingUri;
+    if (!json.meetingUri || !json.meetingCode) throw new Error("meet");
+    return { uri: json.meetingUri, code: json.meetingCode };
   }
 
   async function exchange({ code, verifier }) {
@@ -462,6 +462,66 @@ function createGoogle({ host, vault }) {
       cached = null;
     },
   };
+}
+
+// ---------------------------------------------------------------------------
+// The room registry
+//
+// The plugin API has no write path into Buzz — the conversation service sends
+// nothing and artifact storage is read-only — so a channel's meeting cannot be
+// published to the relay. A small service holds the mapping instead, keyed by
+// channel id, and every client reads the same room from it.
+// ---------------------------------------------------------------------------
+
+export const REGISTRY_ORIGIN = "https://meet-rooms.fiction.services";
+
+export function createRegistry({ host, vault }) {
+  const base = REGISTRY_ORIGIN;
+
+  const token = () => vault.read().registryToken;
+
+  function headers(extra) {
+    const value = token();
+    if (!value) throw new Error("no-registry-token");
+    return { Authorization: "Bearer " + value, ...extra };
+  }
+
+  const roomUrl = (channelId) => `${base}/rooms/${encodeURIComponent(channelId)}`;
+
+  async function getRoom(channelId) {
+    const response = await host.request({
+      url: roomUrl(channelId),
+      headers: headers({ Accept: "application/json" }),
+    });
+    if (response.status === 404) return null;
+    if (response.status === 401 || response.status === 403) throw new Error("registry-token");
+    if (response.status !== 200) throw new Error("registry");
+    return JSON.parse(response.body);
+  }
+
+  async function putRoom(channelId, { uri, code }) {
+    const response = await host.request({
+      url: roomUrl(channelId),
+      method: "PUT",
+      headers: headers({ "Content-Type": "application/json" }),
+      body: JSON.stringify({ uri, code }),
+    });
+    if (response.status === 401 || response.status === 403) throw new Error("registry-token");
+    if (response.status !== 200 && response.status !== 201) throw new Error("registry");
+    return JSON.parse(response.body);
+  }
+
+  async function forgetRoom(channelId) {
+    const response = await host.request({
+      url: roomUrl(channelId),
+      method: "DELETE",
+      headers: headers(),
+    });
+    if (response.status === 401 || response.status === 403) throw new Error("registry-token");
+    return response.status === 200;
+  }
+
+  return { getRoom, putRoom, forgetRoom, configured: () => Boolean(token()) };
 }
 
 // ---------------------------------------------------------------------------
@@ -523,6 +583,9 @@ const CSS = `
 .bp-meet-footer { display: flex; gap: 14px; align-items: center; margin-top: 22px; flex-wrap: wrap; }
 .bp-meet-source { font-size: 11px; opacity: 0.55; margin-left: auto; }
 .bp-meet-field + .bp-meet-field { margin-top: 8px; }
+.bp-meet-launcher { font: inherit; font-size: 12px; font-weight: 600; line-height: 1; padding: 6px 10px; border-radius: 6px; border: 1px solid var(--border-subtle, rgba(128,128,128,0.28)); background: transparent; color: inherit; text-decoration: none; cursor: pointer; white-space: nowrap; display: inline-flex; align-items: center; gap: 6px; }
+.bp-meet-launcher:hover { background: var(--affordance-backdrop-hover, rgba(128,128,128,0.14)); }
+.bp-meet-launcher[disabled] { opacity: 0.6; cursor: default; }
 `;
 
 // ---------------------------------------------------------------------------
@@ -577,7 +640,8 @@ function createMeetPage({ React, vault, google, openSettings }) {
     const startInstant = async () => {
       setInstant({ status: "working" });
       try {
-        setInstant({ status: "ready", uri: await google.createSpace() });
+        const space = await google.createSpace();
+        setInstant({ status: "ready", uri: space.uri });
       } catch {
         setInstant({ status: "error" });
       }
@@ -734,7 +798,7 @@ function createMeetPage({ React, vault, google, openSettings }) {
   };
 }
 
-function createSettingsCard({ React, vault, google }) {
+function createSettingsCard({ React, vault, google, registry }) {
   const { useState, useEffect } = React;
   const h = React.createElement;
 
@@ -743,6 +807,7 @@ function createSettingsCard({ React, vault, google }) {
     const [place, setPlace] = useState(vault.place());
     const [clientId, setClientId] = useState("");
     const [clientSecret, setClientSecret] = useState("");
+    const [registryToken, setRegistryToken] = useState("");
     const [phase, setPhase] = useState("idle"); // idle | authorize
     const [authUrl, setAuthUrl] = useState("");
     const [pasted, setPasted] = useState("");
@@ -847,6 +912,33 @@ function createSettingsCard({ React, vault, google }) {
       });
     };
 
+    // --- the shared room registry ------------------------------------------
+    const saveRegistry = async () => {
+      const value = registryToken.trim();
+      if (value.length < 16) {
+        setMessage({ kind: "error", text: "That is too short to be the registry token." });
+        return;
+      }
+      setBusy(true);
+      const result = await vault.write({ registryToken: value });
+      setBusy(false);
+      if (!result.kept) {
+        setMessage({ kind: "error", text: "The system store did not keep the token. Nothing was changed." });
+        return;
+      }
+      setRegistryToken("");
+      sync();
+      setMessage({ kind: "ok", text: "Registry token saved. The Meet button now appears in every conversation." });
+    };
+
+    const clearRegistry = async () => {
+      setBusy(true);
+      await vault.write({ registryToken: undefined });
+      sync();
+      setBusy(false);
+      setMessage({ kind: "ok", text: "Registry token removed. The Meet button is hidden." });
+    };
+
     const googleSection = connected
       ? h(
           "div",
@@ -940,6 +1032,45 @@ function createSettingsCard({ React, vault, google }) {
       googleSection,
       message ? h("p", { className: message.kind === "error" ? "bp-meet-error" : "bp-meet-status" }, message.text) : null,
 
+      h("hr", { className: "bp-meet-divider" }),
+
+      h("p", { className: "bp-meet-label" }, "Shared rooms"),
+      h(
+        "p",
+        { className: "bp-meet-hint" },
+        "A conversation's Meet room is stored in a small registry so everyone with this token joins the same room. " +
+          `Without a token the Meet button stays hidden. The registry is ${REGISTRY_ORIGIN}.`,
+      ),
+      h("input", {
+        className: "bp-meet-field",
+        type: "password",
+        autoComplete: "off",
+        placeholder: config.registryToken ? "A token is saved" : "Registry token",
+        value: registryToken,
+        onChange: (event) => setRegistryToken(event.target.value),
+      }),
+      h(
+        "div",
+        { className: "bp-meet-actions" },
+        h(
+          "button",
+          {
+            className: "bp-meet-button",
+            type: "button",
+            disabled: busy || !registryToken.trim(),
+            onClick: () => void saveRegistry(),
+          },
+          config.registryToken ? "Replace token" : "Save token",
+        ),
+        config.registryToken
+          ? h(
+              "button",
+              { className: "bp-meet-button", type: "button", disabled: busy, onClick: () => void clearRegistry() },
+              "Remove",
+            )
+          : null,
+      ),
+
       h(
         "p",
         { className: "bp-meet-status" },
@@ -949,6 +1080,94 @@ function createSettingsCard({ React, vault, google }) {
             ? `Nothing saved yet. Your details will go to ${storeName}.`
             : "Nothing saved yet. This system has no credential store the plugin can reach, so details will be kept in this Buzz profile in plain text.",
       ),
+    );
+  };
+}
+
+// ---------------------------------------------------------------------------
+// The channel launcher: one Meet room per conversation, shared by the registry
+//
+// Rendered inside the channel and DM header, left of the huddle control: the
+// host sorts launchers by key, and only buzz.huddles and buzz.github rank above
+// zero.
+// ---------------------------------------------------------------------------
+
+function launcherMessage(reason) {
+  if (reason === "registry-token") return "Set the registry token in Settings → Plugins → Meet.";
+  if (reason === "no-registry-token") return "Set the registry token in Settings → Plugins → Meet.";
+  if (reason === "meet") return "Google could not create the meeting.";
+  if (reason === "reauthorise") return "Google access expired. Reconnect in Settings → Plugins → Meet.";
+  return "The room registry is unreachable.";
+}
+
+function createChannelLauncher({ React, registry, google }) {
+  const { useState, useEffect, useCallback } = React;
+  const h = React.createElement;
+
+  return function MeetLauncher({ context }) {
+    const channelId = context?.channelId;
+    const [state, setState] = useState({ status: "loading" });
+    const [busy, setBusy] = useState(false);
+
+    const load = useCallback(async () => {
+      if (!channelId || !registry.configured()) {
+        setState({ status: "off" });
+        return;
+      }
+      try {
+        const room = await registry.getRoom(channelId);
+        setState(room ? { status: "room", room } : { status: "none" });
+      } catch (error) {
+        setState({ status: "error", reason: error.message });
+      }
+    }, [channelId]);
+
+    useEffect(() => {
+      void load();
+    }, [load]);
+
+    const start = async () => {
+      setBusy(true);
+      try {
+        const space = await google.createSpace();
+        const room = await registry.putRoom(channelId, space);
+        setState({ status: "room", room });
+      } catch (error) {
+        setState({ status: "error", reason: error.message });
+      }
+      setBusy(false);
+    };
+
+    // No token, or still reading: contribute nothing rather than a dead control.
+    if (state.status === "off" || state.status === "loading") return null;
+
+    if (state.status === "room") {
+      return h(
+        "a",
+        {
+          className: "bp-meet-launcher",
+          href: state.room.uri,
+          target: "_blank",
+          rel: "noopener noreferrer",
+          title: `Meet room for this conversation — ${state.room.code}`,
+        },
+        "Meet",
+      );
+    }
+
+    return h(
+      "button",
+      {
+        className: "bp-meet-launcher",
+        type: "button",
+        disabled: busy,
+        title:
+          state.status === "error"
+            ? launcherMessage(state.reason)
+            : "Create a Meet room shared by everyone in this conversation",
+        onClick: () => void start(),
+      },
+      busy ? "…" : "Meet",
     );
   };
 }
@@ -967,6 +1186,8 @@ export function apply(ctx) {
   });
   const vault = createVault(credentials);
   const google = createGoogle({ host: ctx.host, vault });
+  const registry = createRegistry({ host: ctx.host, vault });
+  const MeetLauncher = createChannelLauncher({ React, registry, google });
 
   ctx.effect(() => {
     // [DOM] API v1 has no CSS file and the host has no style service, so the
@@ -993,10 +1214,21 @@ export function apply(ctx) {
     component: createMeetPage({ React, vault, google, openSettings }),
   });
 
+  // The launcher is the whole point of this panel: it renders in the channel
+  // and DM header, and the panel itself is never opened.
+  ctx.panels.register({
+    id: "meet-room",
+    title: "Meet",
+    matches: () => false,
+    channelPlacement: "side",
+    channelLauncher: ({ context }) => React.createElement(MeetLauncher, { context }),
+    component: () => null,
+  });
+
   ctx.settingsCards.register({
     id: "settings",
     title: "Meet",
     group: "Plugins",
-    component: createSettingsCard({ React, vault, google }),
+    component: createSettingsCard({ React, vault, google, registry }),
   });
 }
