@@ -1355,19 +1355,33 @@ export function apply(ctx) {
     component: () => null,
   });
 
-  // /meet in the composer offers this conversation's room link.
-  ctx.conversation.registerCompletion({
-    id: "meet-room",
-    title: "Meet room",
-    order: 0,
-    match: (observation) => matchMeetCommand(observation.text, observation.start),
-    component: MeetCommand,
-  });
+  // Optional contributions are guarded: if a future host drops one of these
+  // APIs, only that feature is lost. An unguarded throw makes the host roll
+  // back every registration from this apply, including the launcher.
+  const guard = (label, fn) => {
+    try {
+      fn();
+    } catch (error) {
+      console.warn(`[meet] ${label} unavailable:`, error && error.message);
+    }
+  };
 
-  ctx.settingsCards.register({
-    id: "settings",
-    title: "Meet",
-    group: "Plugins",
-    component: createSettingsCard({ React, vault, google, registry }),
-  });
+  guard("composer command", () =>
+    ctx.conversation.registerCompletion({
+      id: "meet-room",
+      title: "Meet room",
+      order: 0,
+      match: (observation) => matchMeetCommand(observation.text, observation.start),
+      component: MeetCommand,
+    }),
+  );
+
+  guard("settings card", () =>
+    ctx.settingsCards.register({
+      id: "settings",
+      title: "Meet",
+      group: "Plugins",
+      component: createSettingsCard({ React, vault, google, registry }),
+    }),
+  );
 }
