@@ -1152,7 +1152,7 @@ function meetMarkElement(h, colors) {
   );
 }
 
-function createChannelLauncher({ React, registry, google }) {
+function createChannelLauncher({ React, registry, google, vault }) {
   const { useState, useEffect, useCallback } = React;
   const h = React.createElement;
 
@@ -1162,7 +1162,21 @@ function createChannelLauncher({ React, registry, google }) {
     const [busy, setBusy] = useState(false);
 
     const load = useCallback(async () => {
-      if (!channelId || !registry.configured()) {
+      if (!channelId) {
+        setState({ status: "off" });
+        return;
+      }
+      // The credential store hydrates after launch. Reporting "off" before it
+      // is ready hides the control until something writes the store, so wait.
+      // vault.ready is a promise that settles when the credential store has
+      // hydrated. Read before that and the document is empty, which hid the
+      // control until something wrote the store.
+      try {
+        await vault.ready;
+      } catch {
+        /* a store that fails to load leaves read() empty; handled below */
+      }
+      if (!registry.configured()) {
         setState({ status: "off" });
         return;
       }
@@ -1176,6 +1190,17 @@ function createChannelLauncher({ React, registry, google }) {
 
     useEffect(() => {
       void load();
+    }, [load]);
+
+    // Reload whenever the store hydrates or changes: that is the signal that
+    // the token appeared, and the reason settings changes used to be needed.
+    useEffect(() => {
+      const off = vault.subscribe(() => {
+        void load();
+      });
+      return () => {
+        if (typeof off === "function") off();
+      };
     }, [load]);
 
     const start = async () => {
@@ -1316,7 +1341,7 @@ export function apply(ctx) {
   const vault = createVault(credentials);
   const google = createGoogle({ host: ctx.host, vault });
   const registry = createRegistry({ host: ctx.host, vault });
-  const MeetLauncher = createChannelLauncher({ React, registry, google });
+  const MeetLauncher = createChannelLauncher({ React, registry, google, vault });
   const MeetCommand = createMeetCommand({ React, registry, google });
 
   ctx.effect(() => {
